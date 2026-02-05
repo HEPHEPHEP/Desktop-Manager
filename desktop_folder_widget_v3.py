@@ -1245,11 +1245,16 @@ class FolderTile:
         self.hwnd = None
         self.is_embedded = False
         
-        # Größen - 2x2 Desktop-Icons
-        self.tile_width = DESKTOP_GRID_X * 2  # 160
-        self.tile_height = DESKTOP_GRID_Y * 2  # 180
-        self.expanded_width = 245   # 30% kleiner (war 350)
-        self.expanded_height = 280  # 30% kleiner (war 400)
+        # Basis-Größen (ohne benutzerdefinierte Verkleinerung)
+        self.base_tile_width = DESKTOP_GRID_X * 2
+        self.base_tile_height = DESKTOP_GRID_Y * 2
+        self.base_expanded_width = 245
+        self.base_expanded_height = 280
+
+        # Interaktions-Flags
+        self._persistent_expand = False
+
+        self.update_sizes_from_settings()
         
         self.create_window()
     
@@ -1258,7 +1263,7 @@ class FolderTile:
         self.window = tk.Toplevel(self.manager.root)
         self.window.title(f"DesktopFolder_{self.tile_id}")
         self.window.overrideredirect(True)
-        self.window.attributes("-alpha", 0.92)
+        self.window.attributes("-alpha", 1.0)
         
         # Transparente Farbe für echte durchsichtige Ecken.
         # Nur die winzigen Eck-Dreiecke (außerhalb der abgerundeten 3D-Hintergrund-
@@ -1417,6 +1422,7 @@ class FolderTile:
         
         self.window.bind("<Enter>", self._on_window_enter)
         self.window.bind("<Leave>", self._on_window_leave)
+        self.window.bind("<FocusOut>", self._on_focus_out)
     
     def _on_window_enter(self, event):
         """Maus betritt das Fenster — Hover-Expand starten"""
@@ -1460,8 +1466,23 @@ class FolderTile:
             self._draw_hover_state(False)
         
         # Collapse nach 350ms
-        if self.is_expanded and not self.animation_running:
+        if self.is_expanded and not self.animation_running and not self._persistent_expand:
             self._hover_collapse_timer = self.window.after(350, self._hover_collapse)
+
+    def _on_focus_out(self, event):
+        """Wenn persistent geöffnet und Fokus verloren, einklappen."""
+        if self.is_expanded and self._persistent_expand and not self.animation_running:
+            self.window.after(10, self._collapse_if_focus_lost)
+
+    def _collapse_if_focus_lost(self):
+        try:
+            focused = self.window.focus_displayof()
+        except Exception:
+            focused = None
+
+        if self.is_expanded and self._persistent_expand and focused is None:
+            self._persistent_expand = False
+            self.collapse()
     
     def _hover_expand(self):
         """Wird nach Hover-Verzögerung aufgerufen — expandiert die Kachel"""
@@ -1473,9 +1494,22 @@ class FolderTile:
     def _hover_collapse(self):
         """Wird nach Leave-Verzögerung aufgerufen — klappt zusammen"""
         self._hover_collapse_timer = None
-        if self._mouse_inside or not self.is_expanded or self.animation_running:
+        if self._mouse_inside or not self.is_expanded or self.animation_running or self._persistent_expand:
             return
         self.collapse()
+
+    def update_sizes_from_settings(self):
+        """Wendet die globale Verkleinerung (10-70%) auf beide Kachelgrößen an."""
+        settings = self.manager.config.setdefault("settings", {})
+        shrink_percent = int(settings.get("shrink_percent", 30))
+        shrink_percent = max(10, min(70, shrink_percent))
+        settings["shrink_percent"] = shrink_percent
+
+        scale = (100 - shrink_percent) / 100.0
+        self.tile_width = max(80, int(self.base_tile_width * scale))
+        self.tile_height = max(90, int(self.base_tile_height * scale))
+        self.expanded_width = max(130, int(self.base_expanded_width * scale))
+        self.expanded_height = max(150, int(self.base_expanded_height * scale))
     
     def _draw_hover_state(self, hovered):
         """Tauscht NUR den Hintergrund aus — Icons/Text bleiben unverändert (kein Zittern)"""
@@ -1637,13 +1671,15 @@ class FolderTile:
         self.canvas.create_text(
             width // 2 + 1, height - 9,
             text=name, fill="#000000",
-            font=("Segoe UI Semibold", 9), anchor="s"
+            font=("Segoe UI Semibold", 9), anchor="s", tags=("tile_name",)
         )
         self.canvas.create_text(
             width // 2, height - 10,
             text=name, fill="#e0e0e0",
-            font=("Segoe UI Semibold", 9), anchor="s"
+            font=("Segoe UI Semibold", 9), anchor="s", tags=("tile_name",)
         )
+
+        self.canvas.tag_bind("tile_name", "<Button-1>", self.rename_inline)
     
     def draw_empty_folder(self, width, height):
         """Zeichnet 3D-Ordner-Icon mit Licht und Schatten"""
@@ -1726,18 +1762,20 @@ class FolderTile:
                     font=("Segoe UI", 16, "bold")
                 )
             
-            # Name unter Icon
-            name = shortcut["name"]
-            if len(name) > 8:
-                name = name[:7] + "…"
-            
-            self.canvas.create_text(
-                cx, cy + icon_size//2,
-                text=name,
-                fill="white",
-                font=("Segoe UI", 8),
-                anchor="n"
-            )
+            show_names_small = self.manager.config.get("settings", {}).get("show_names_small", True)
+            if show_names_small:
+                # Name unter Icon
+                name = shortcut["name"]
+                if len(name) > 8:
+                    name = name[:7] + "…"
+
+                self.canvas.create_text(
+                    cx, cy + icon_size//2,
+                    text=name,
+                    fill="white",
+                    font=("Segoe UI", 8),
+                    anchor="n"
+                )
     
     def on_click(self, event):
         """Klick-Handler — bei collapsed wird manuell expandiert (Fallback)"""
@@ -1745,7 +1783,7 @@ class FolderTile:
             return
         
         if not self.is_expanded:
-            self.expand()
+            self.expand(persistent=True)
     
     def start_drag(self, event):
         """Drag starten"""
@@ -1785,13 +1823,14 @@ class FolderTile:
         else:
             self.window.after(50, lambda: self.on_click(event))
     
-    def expand(self):
+    def expand(self, persistent=False):
         """Kachel expandieren"""
         if self.is_expanded or self.animation_running:
             return
         
         self.animation_running = True
         self.is_expanded = True
+        self._persistent_expand = persistent
         
         # Collapse-Timer abbrechen falls noch aktiv
         if self._hover_collapse_timer:
@@ -1835,40 +1874,9 @@ class FolderTile:
             blur_color = 0xC0281E10
             enable_acrylic_blur(self.hwnd, blur_color)
         
-        # === Obere Leiste: nur Drag-Handle + Schließen-Button ===
-        header = tk.Frame(self.expanded_frame, bg=glass_bg, cursor="hand2", height=28)
-        header.pack(fill="x", padx=8, pady=(6, 0))
-        header.pack_propagate(False)
-        
-        header.bind("<ButtonPress-1>", self.start_header_drag)
-        header.bind("<B1-Motion>", self.do_header_drag)
-        header.bind("<ButtonRelease-1>", self.stop_header_drag)
-        
-        # Drag-Indikator (dezente Punkte)
-        drag_hint = tk.Label(
-            header, text="⋯", font=("Segoe UI", 10),
-            bg=glass_bg, fg="#444460", cursor="hand2"
-        )
-        drag_hint.pack(side="left", padx=4)
-        drag_hint.bind("<ButtonPress-1>", self.start_header_drag)
-        drag_hint.bind("<B1-Motion>", self.do_header_drag)
-        drag_hint.bind("<ButtonRelease-1>", self.stop_header_drag)
-        
-        close_btn = tk.Label(
-            header, text="✕", font=("Segoe UI", 11),
-            bg=glass_bg, fg="#666680", cursor="hand2"
-        )
-        close_btn.pack(side="right")
-        close_btn.bind("<Button-1>", lambda e: self.collapse())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#ff4466"))
-        close_btn.bind("<Leave>", lambda e: close_btn.config(fg="#666680"))
-        
-        # Trennlinie
-        tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=2)
-        
         # === Icon-Grid Container ===
         grid_container = tk.Frame(self.expanded_frame, bg=glass_bg)
-        grid_container.pack(fill="both", expand=True, padx=5, pady=(3, 0))
+        grid_container.pack(fill="both", expand=True, padx=5, pady=(6, 0))
         
         canvas = tk.Canvas(grid_container, bg=glass_bg, highlightthickness=0)
         scrollbar = tk.Scrollbar(grid_container, orient="vertical", command=canvas.yview)
@@ -1897,16 +1905,25 @@ class FolderTile:
         else:
             self.create_desktop_icon_grid(shortcuts)
         
-        # === Trennlinie + Titel unten (konsistent mit collapsed) ===
-        tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=(2, 0))
-        
         name = self.config.get("name", "Ordner")
-        footer = tk.Label(
+        self.expanded_footer = tk.Label(
             self.expanded_frame, text=name,
             font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
-            anchor="center"
+            anchor="center", cursor="xterm"
         )
-        footer.pack(fill="x", pady=(3, 8))
+        self.expanded_footer.pack(fill="x", pady=(3, 8))
+        self.expanded_footer.bind("<Button-1>", self.rename_inline)
+
+        # Freie Fläche: Linksklick hält offen, Rechtsklick öffnet Kontextmenü
+        for widget in [self.expanded_frame, grid_container, canvas, self.icons_frame]:
+            widget.bind("<Button-1>", self.on_expanded_background_click, add="+")
+            widget.bind("<Button-3>", self.show_context_menu, add="+")
+
+        # Drag in freier Fläche weiter möglich
+        for widget in [self.expanded_frame, grid_container, canvas]:
+            widget.bind("<ButtonPress-1>", self.start_header_drag, add="+")
+            widget.bind("<B1-Motion>", self.do_header_drag, add="+")
+            widget.bind("<ButtonRelease-1>", self.stop_header_drag, add="+")
         
         self.animation_running = False
     
@@ -2326,6 +2343,7 @@ class FolderTile:
         
         self.animation_running = True
         self.is_expanded = False
+        self._persistent_expand = False
         
         if self.expanded_frame:
             self.expanded_frame.destroy()
@@ -2362,7 +2380,7 @@ class FolderTile:
         
         # Zurück in den Hintergrund
         self.window.attributes("-topmost", False)
-        self.window.attributes("-alpha", 0.92)
+        self.window.attributes("-alpha", 1.0)
         self.window.after(100, self.move_to_background)
     
     def animate_size(self, from_w, from_h, to_w, to_h, x, y, callback=None):
@@ -2397,8 +2415,14 @@ class FolderTile:
                        activebackground="#2a2a5a", activeforeground="white",
                        relief="flat", bd=0)
         
-        menu.add_command(label="📂 Öffnen", command=self.expand)
+        menu.add_command(label="📂 Öffnen", command=lambda: self.expand(persistent=True))
+        if self.is_expanded:
+            menu.add_command(label="↩️ Einklappen", command=self.collapse)
         menu.add_command(label="✏️ Umbenennen", command=self.rename)
+        menu.add_command(label="✏️ Namen in kleiner Kachel: " + ("an" if self.manager.config.get("settings", {}).get("show_names_small", True) else "aus"),
+                         command=self.toggle_small_names)
+        menu.add_command(label=f"📏 Verkleinerung: {self.manager.config.get('settings', {}).get('shrink_percent', 30)}%",
+                         command=self.configure_shrink_percent)
         menu.add_separator()
         menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
         menu.add_separator()
@@ -2430,6 +2454,40 @@ class FolderTile:
             self.config["name"] = new_name
             self.manager.save_config()
             self.draw_tile_icon()
+            if self.is_expanded and hasattr(self, "expanded_footer"):
+                self.expanded_footer.config(text=new_name)
+
+    def rename_inline(self, event=None):
+        """Inline-Umbenennung über Klick auf den Namen."""
+        self.rename()
+
+    def toggle_small_names(self):
+        settings = self.manager.config.setdefault("settings", {})
+        settings["show_names_small"] = not settings.get("show_names_small", True)
+        self.manager.save_config()
+        self.draw_tile_icon()
+
+    def configure_shrink_percent(self):
+        settings = self.manager.config.setdefault("settings", {})
+        current = int(settings.get("shrink_percent", 30))
+        new_value = simpledialog.askinteger(
+            "Verkleinerung",
+            "Verkleinerung in % (10-70):",
+            initialvalue=current,
+            minvalue=10,
+            maxvalue=70,
+            parent=self.window,
+        )
+        if new_value is None:
+            return
+
+        settings["shrink_percent"] = new_value
+        self.manager.save_config()
+        self.manager.apply_settings_to_all_tiles()
+
+    def on_expanded_background_click(self, event):
+        """Linksklick in freie Fläche: expandiert bleibt persistent offen."""
+        self._persistent_expand = True
     
     def delete_tile(self):
         """Kachel löschen"""
@@ -2489,13 +2547,37 @@ class DesktopFolderManager:
     
     def load_config(self):
         """Lädt Konfiguration"""
+        default_config = {
+            "tiles": {},
+            "settings": {
+                "shrink_percent": 30,
+                "show_names_small": True,
+            }
+        }
         if self.CONFIG_FILE.exists():
             try:
                 with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                    loaded.setdefault("tiles", {})
+                    settings = loaded.setdefault("settings", {})
+                    settings.setdefault("shrink_percent", 30)
+                    settings.setdefault("show_names_small", True)
+                    return loaded
             except:
                 pass
-        return {"tiles": {}}
+        return default_config
+
+    def apply_settings_to_all_tiles(self):
+        """Übernimmt Größen-/Anzeigeeinstellungen für alle Kacheln."""
+        for tile in self.tiles.values():
+            tile.update_sizes_from_settings()
+            if tile.is_expanded:
+                tile.refresh_expanded_view()
+                tile.window.geometry(f"{tile.expanded_width}x{tile.expanded_height}+{tile.window.winfo_x()}+{tile.window.winfo_y()}")
+            else:
+                tile.draw_tile_icon()
+                tile.window.geometry(f"{tile.tile_width}x{tile.tile_height}+{tile.window.winfo_x()}+{tile.window.winfo_y()}")
+                tile.apply_rounded_corners(tile.tile_width, tile.tile_height)
     
     def save_config(self):
         """Speichert Konfiguration"""
