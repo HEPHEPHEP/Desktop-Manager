@@ -111,6 +111,40 @@ kernel32.GetFileAttributesW.restype = ctypes.c_uint32
 kernel32.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
 kernel32.SetFileAttributesW.restype = ctypes.c_bool
 
+# Prozess-Memory Funktionen für Desktop-Icon-Positionierung
+kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32]
+kernel32.OpenProcess.restype = ctypes.c_void_p
+
+kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+kernel32.CloseHandle.restype = ctypes.c_bool
+
+kernel32.VirtualAllocEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32]
+kernel32.VirtualAllocEx.restype = ctypes.c_void_p
+
+kernel32.VirtualFreeEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+kernel32.VirtualFreeEx.restype = ctypes.c_bool
+
+kernel32.WriteProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+kernel32.WriteProcessMemory.restype = ctypes.c_bool
+
+kernel32.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+kernel32.ReadProcessMemory.restype = ctypes.c_bool
+
+user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+user32.GetWindowThreadProcessId.restype = ctypes.c_uint32
+
+# GetWindowRect für Multi-Monitor-Unterstützung
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(RECT)]
+user32.GetWindowRect.restype = ctypes.c_bool
+
 # EnumWindows callback type
 WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, HWND, ctypes.c_void_p)
 user32.EnumWindows.argtypes = [WNDENUMPROC, ctypes.c_void_p]
@@ -136,11 +170,11 @@ HWND_BOTTOM = HWND(1)
 FILE_ATTRIBUTE_HIDDEN = 0x02
 FILE_ATTRIBUTE_NORMAL = 0x80
 
-# Desktop Grid (typische Windows-Werte)
-DESKTOP_GRID_X = 80  # Horizontaler Abstand
-DESKTOP_GRID_Y = 90  # Vertikaler Abstand
-DESKTOP_MARGIN_X = 10  # Linker Rand
-DESKTOP_MARGIN_Y = 10  # Oberer Rand
+# Desktop Grid (Windows 11 typische Werte bei 100% Skalierung)
+DESKTOP_GRID_X = 75  # Horizontaler Abstand
+DESKTOP_GRID_Y = 75  # Vertikaler Abstand  
+DESKTOP_MARGIN_X = 0  # Linker Rand (kein Offset)
+DESKTOP_MARGIN_Y = 0  # Oberer Rand (kein Offset)
 
 
 class WindowsDesktopAPI:
@@ -307,6 +341,255 @@ class WindowsDesktopAPI:
             )
         except:
             pass
+    
+    @staticmethod
+    def set_desktop_icon_position(filename, screen_x, screen_y):
+        """
+        Setzt die Position eines Desktop-Icons über die ListView API.
+        Unterstützt Multi-Monitor-Setups.
+        
+        Args:
+            filename: Name der Datei (z.B. "Chrome.lnk")
+            screen_x, screen_y: Absolute Bildschirmkoordinaten
+        
+        Returns:
+            True bei Erfolg, False bei Fehler
+        """
+        try:
+            # Desktop ListView-Fenster finden
+            progman = user32.FindWindowW("Progman", None)
+            if not progman:
+                print("  ⚠ Progman nicht gefunden")
+                return False
+            
+            # SHELLDLL_DefView finden (kann unter Progman oder WorkerW sein)
+            defview = user32.FindWindowExW(HWND(progman), HWND(0), "SHELLDLL_DefView", None)
+            
+            if not defview:
+                # Unter WorkerW suchen
+                def find_defview_callback(hwnd, lparam):
+                    shell = user32.FindWindowExW(hwnd, HWND(0), "SHELLDLL_DefView", None)
+                    if shell:
+                        find_defview_callback.result = shell
+                        return False
+                    return True
+                
+                find_defview_callback.result = None
+                enum_func = WNDENUMPROC(find_defview_callback)
+                user32.EnumWindows(enum_func, None)
+                defview = find_defview_callback.result
+            
+            if not defview:
+                print("  ⚠ SHELLDLL_DefView nicht gefunden")
+                return False
+            
+            # SysListView32 finden
+            listview = user32.FindWindowExW(HWND(defview), HWND(0), "SysListView32", None)
+            if not listview:
+                print("  ⚠ SysListView32 nicht gefunden")
+                return False
+            
+            listview_int = int(listview)
+            
+            # ListView-Position auf dem Bildschirm ermitteln für Multi-Monitor
+            listview_rect = RECT()
+            user32.GetWindowRect(listview_int, ctypes.byref(listview_rect))
+            
+            # Absolute Koordinaten in ListView-relative Koordinaten umrechnen
+            # Die ListView deckt alle Monitore ab, also müssen wir die Position
+            # relativ zum ListView-Ursprung berechnen
+            relative_x = int(screen_x) - listview_rect.left
+            relative_y = int(screen_y) - listview_rect.top
+            
+            print(f"  ℹ ListView bei ({listview_rect.left}, {listview_rect.top})")
+            print(f"  ℹ Screen-Koordinaten: ({screen_x}, {screen_y})")
+            print(f"  ℹ Relative Koordinaten: ({relative_x}, {relative_y})")
+            
+            # Negative Koordinaten sind bei Multi-Monitor normal (Monitor links)
+            # aber die ListView-Koordinaten sollten nicht negativ sein für Icons
+            # auf dem aktuellen Monitor
+            
+            # ListView Konstanten
+            LVM_FIRST = 0x1000
+            LVM_GETITEMCOUNT = LVM_FIRST + 4
+            LVM_SETITEMPOSITION = LVM_FIRST + 15
+            LVM_GETITEMTEXTW = LVM_FIRST + 115
+            LVM_FINDITEMW = LVM_FIRST + 83
+            
+            # Prozess-ID des Explorer ermitteln
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(listview_int, ctypes.byref(pid))
+            
+            # Prozess öffnen
+            PROCESS_ALL_ACCESS = 0x1F0FFF
+            process = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid.value)
+            if not process:
+                print("  ⚠ Konnte Explorer-Prozess nicht öffnen")
+                return False
+            
+            try:
+                # Anzahl der Icons
+                count = ctypes.windll.user32.SendMessageW(listview_int, LVM_GETITEMCOUNT, 0, 0)
+                if count <= 0:
+                    print("  ⚠ Keine Icons auf Desktop")
+                    return False
+                
+                # LVFINDINFO Struktur für die Suche
+                class LVFINDINFOW(ctypes.Structure):
+                    _fields_ = [
+                        ("flags", ctypes.c_uint),
+                        ("psz", ctypes.c_wchar_p),
+                        ("lParam", ctypes.c_void_p),
+                        ("pt_x", ctypes.c_int),
+                        ("pt_y", ctypes.c_int),
+                        ("vkDirection", ctypes.c_uint),
+                    ]
+                
+                # Speicher im Explorer-Prozess allozieren
+                MEM_COMMIT = 0x1000
+                MEM_RESERVE = 0x2000
+                MEM_RELEASE = 0x8000
+                PAGE_READWRITE = 0x04
+                
+                # Dateinamen vorbereiten (ohne .lnk Extension für Suche)
+                search_name = Path(filename).stem if filename.endswith('.lnk') else filename
+                search_name_with_ext = filename
+                
+                # Buffer für Text (520 Bytes für Unicode-String)
+                buffer_size = 520
+                remote_buffer = kernel32.VirtualAllocEx(
+                    process, None, buffer_size, 
+                    MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
+                )
+                
+                if not remote_buffer:
+                    print("  ⚠ Konnte keinen Speicher im Explorer allozieren")
+                    return False
+                
+                try:
+                    # LVITEM Struktur
+                    class LVITEMW(ctypes.Structure):
+                        _fields_ = [
+                            ("mask", ctypes.c_uint),
+                            ("iItem", ctypes.c_int),
+                            ("iSubItem", ctypes.c_int),
+                            ("state", ctypes.c_uint),
+                            ("stateMask", ctypes.c_uint),
+                            ("pszText", ctypes.c_void_p),
+                            ("cchTextMax", ctypes.c_int),
+                            ("iImage", ctypes.c_int),
+                            ("lParam", ctypes.c_void_p),
+                            ("iIndent", ctypes.c_int),
+                            ("iGroupId", ctypes.c_int),
+                            ("cColumns", ctypes.c_uint),
+                            ("puColumns", ctypes.c_void_p),
+                            ("piColFmt", ctypes.c_void_p),
+                            ("iGroup", ctypes.c_int),
+                        ]
+                    
+                    LVIF_TEXT = 0x0001
+                    
+                    # Struktur für LVITEM im Remote-Prozess
+                    lvitem_size = ctypes.sizeof(LVITEMW)
+                    remote_lvitem = kernel32.VirtualAllocEx(
+                        process, None, lvitem_size + buffer_size,
+                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
+                    )
+                    
+                    if not remote_lvitem:
+                        print("  ⚠ Konnte LVITEM-Speicher nicht allozieren")
+                        return False
+                    
+                    try:
+                        found_index = -1
+                        
+                        # Durch alle Items iterieren und Namen vergleichen
+                        for i in range(count):
+                            # LVITEM vorbereiten
+                            lvitem = LVITEMW()
+                            lvitem.mask = LVIF_TEXT
+                            lvitem.iItem = i
+                            lvitem.iSubItem = 0
+                            lvitem.pszText = remote_lvitem + lvitem_size  # Text-Buffer nach Struktur
+                            lvitem.cchTextMax = 260
+                            
+                            # LVITEM in Remote-Prozess schreiben
+                            written = ctypes.c_size_t()
+                            kernel32.WriteProcessMemory(
+                                process, remote_lvitem, 
+                                ctypes.byref(lvitem), lvitem_size,
+                                ctypes.byref(written)
+                            )
+                            
+                            # Text abrufen
+                            ctypes.windll.user32.SendMessageW(
+                                listview_int, LVM_GETITEMTEXTW, i, remote_lvitem
+                            )
+                            
+                            # Text aus Remote-Prozess lesen
+                            text_buffer = ctypes.create_unicode_buffer(260)
+                            kernel32.ReadProcessMemory(
+                                process, remote_lvitem + lvitem_size,
+                                text_buffer, 520, ctypes.byref(written)
+                            )
+                            
+                            item_name = text_buffer.value
+                            
+                            # Vergleichen (mit und ohne Extension)
+                            if item_name.lower() == search_name.lower() or \
+                               item_name.lower() == search_name_with_ext.lower():
+                                found_index = i
+                                print(f"  ✓ Icon '{item_name}' gefunden bei Index {i}")
+                                break
+                        
+                        if found_index >= 0:
+                            # Position setzen mit LVM_SETITEMPOSITION
+                            # Verwende die relativen Koordinaten
+                            # MAKELPARAM: y in high word, x in low word
+                            # Für Multi-Monitor: Verwende screen_x/screen_y direkt
+                            # da die ListView den gesamten virtuellen Desktop abdeckt
+                            
+                            # Versuche erst mit relativen Koordinaten
+                            x_pos = relative_x
+                            y_pos = relative_y
+                            
+                            # Falls relative Koordinaten negativ, verwende absolute
+                            if x_pos < 0 or y_pos < 0:
+                                x_pos = int(screen_x)
+                                y_pos = int(screen_y)
+                                print(f"  ℹ Verwende absolute Koordinaten: ({x_pos}, {y_pos})")
+                            
+                            pos_lparam = (int(y_pos) << 16) | (int(x_pos) & 0xFFFF)
+                            
+                            result = ctypes.windll.user32.SendMessageW(
+                                listview_int, LVM_SETITEMPOSITION, found_index, pos_lparam
+                            )
+                            
+                            if result:
+                                print(f"  ✓ Icon-Position gesetzt auf ({x_pos}, {y_pos})")
+                                return True
+                            else:
+                                print(f"  ⚠ LVM_SETITEMPOSITION fehlgeschlagen")
+                                print(f"    (Tipp: 'Icons automatisch anordnen' deaktivieren)")
+                                return False
+                        else:
+                            print(f"  ⚠ Icon '{search_name}' nicht auf Desktop gefunden")
+                            return False
+                            
+                    finally:
+                        kernel32.VirtualFreeEx(process, remote_lvitem, 0, MEM_RELEASE)
+                        
+                finally:
+                    kernel32.VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE)
+                    
+            finally:
+                kernel32.CloseHandle(process)
+                
+        except Exception as e:
+            print(f"  ⚠ Fehler beim Setzen der Icon-Position: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 class IconExtractor:
@@ -435,8 +718,8 @@ class FolderTile:
         # Größen - 2x2 Desktop-Icons
         self.tile_width = DESKTOP_GRID_X * 2  # 160
         self.tile_height = DESKTOP_GRID_Y * 2  # 180
-        self.expanded_width = 350
-        self.expanded_height = 400
+        self.expanded_width = 245   # 30% kleiner (war 350)
+        self.expanded_height = 280  # 30% kleiner (war 400)
         
         self.create_window()
     
@@ -445,7 +728,7 @@ class FolderTile:
         self.window = tk.Toplevel(self.manager.root)
         self.window.title(f"DesktopFolder_{self.tile_id}")
         self.window.overrideredirect(True)
-        self.window.attributes("-alpha", 0.95)
+        self.window.attributes("-alpha", 0.75)  # Mehr Transparenz
         
         # Position auf Grid snappen
         x = self.config.get("pos_x", DESKTOP_MARGIN_X + int(self.tile_id) * self.tile_width)
@@ -458,21 +741,21 @@ class FolderTile:
         
         self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
         
-        # Hauptframe - mit sichtbarem Rand für bessere Erkennbarkeit
+        # Hauptframe - gleiche Farbe wie expanded (#1a1a2e)
         self.main_frame = tk.Frame(
             self.window,
-            bg="#1e1e2e",
+            bg="#1a1a2e",
             highlightthickness=1,
             highlightbackground="#3a3a4a"
         )
         self.main_frame.pack(fill="both", expand=True)
         
-        # Canvas für Kachel-Icon
+        # Canvas für Kachel-Icon - gleiche Farbe
         self.canvas = tk.Canvas(
             self.main_frame,
             width=self.tile_width - 2,
             height=self.tile_height - 2,
-            bg="#1e1e2e",
+            bg="#1a1a2e",
             highlightthickness=0
         )
         self.canvas.pack(fill="both", expand=True)
@@ -833,8 +1116,9 @@ class FolderTile:
         self.animation_running = True
         self.is_expanded = True
         
-        # Fenster nach vorne bringen
+        # Fenster nach vorne bringen und halbtransparent machen
         self.window.attributes("-topmost", True)
+        self.window.attributes("-alpha", 0.80)  # Etwas weniger transparent beim Öffnen
         self.window.lift()
         self.window.focus_force()
         
@@ -923,27 +1207,14 @@ class FolderTile:
         else:
             self.create_desktop_icon_grid(shortcuts)
         
-        # Footer
-        footer = tk.Frame(self.expanded_frame, bg="#1a1a2e")
-        footer.pack(fill="x", padx=10, pady=8)
-        
-        add_btn = tk.Label(
-            footer, text="➕ Hinzufügen", font=("Segoe UI", 9),
-            bg="#2a2a3e", fg="white", padx=12, pady=6, cursor="hand2"
-        )
-        add_btn.pack(side="left")
-        add_btn.bind("<Button-1>", lambda e: self.add_shortcut_dialog())
-        add_btn.bind("<Enter>", lambda e: add_btn.config(bg="#3a3a4e"))
-        add_btn.bind("<Leave>", lambda e: add_btn.config(bg="#2a2a3e"))
-        
         self.animation_running = False
     
     def create_desktop_icon_grid(self, shortcuts):
         """Erstellt Desktop-ähnliches Icon-Grid"""
-        cols = 4
-        icon_size = 42
-        cell_width = 78
-        cell_height = 72
+        cols = 3  # Angepasst für kleineres Fenster
+        icon_size = 36  # Etwas kleiner
+        cell_width = 70
+        cell_height = 65
         
         for i, shortcut in enumerate(shortcuts):
             row = i // cols
@@ -1021,49 +1292,121 @@ class FolderTile:
             )
             name_label.pack()
             
-            # Event-Handler mit Drag-Out Funktion
+            # Event-Handler mit Drag-Out Funktion und Geister-Fenster
             def make_handlers(idx, path, shortcut_name, frame, name_lbl, icon_lbl):
-                drag_data = {'dragging': False, 'start_x': 0, 'start_y': 0}
+                drag_data = {
+                    'dragging': False, 
+                    'start_x': 0, 
+                    'start_y': 0,
+                    'ghost_window': None,
+                    'active': False  # Verhindert Leave-Reset während Drag
+                }
                 
                 def on_enter(e):
-                    frame.config(bg="#3a3a5e")
-                    name_lbl.config(bg="#3a3a5e")
-                    try:
-                        icon_lbl.config(bg="#3a3a5e")
-                    except:
-                        pass
+                    if not drag_data['active']:  # Nur wenn nicht im Drag-Modus
+                        frame.config(bg="#3a3a5e")
+                        name_lbl.config(bg="#3a3a5e")
+                        try:
+                            icon_lbl.config(bg="#3a3a5e")
+                        except:
+                            pass
                 
                 def on_leave(e):
+                    if not drag_data['active']:  # Nur wenn nicht im Drag-Modus
+                        frame.config(bg="#1a1a2e")
+                        name_lbl.config(bg="#1a1a2e")
+                        try:
+                            icon_lbl.config(bg="#1a1a2e")
+                        except:
+                            pass
+                
+                def on_press(e):
+                    drag_data['start_x'] = e.x_root
+                    drag_data['start_y'] = e.y_root
+                    drag_data['dragging'] = False
+                    drag_data['active'] = True
+                
+                def create_ghost_window():
+                    """Erstellt ein halbtransparentes Geister-Fenster"""
+                    ghost = tk.Toplevel(self.window)
+                    ghost.overrideredirect(True)
+                    ghost.attributes("-alpha", 0.7)
+                    ghost.attributes("-topmost", True)
+                    ghost.geometry("60x70")
+                    ghost.config(bg="#e94560")
+                    
+                    # Icon und Name im Geisterfenster
+                    ghost_frame = tk.Frame(ghost, bg="#e94560")
+                    ghost_frame.pack(fill="both", expand=True, padx=3, pady=3)
+                    
+                    # Mini-Icon (farbiges Rechteck mit Buchstabe)
+                    ghost_canvas = tk.Canvas(ghost_frame, width=40, height=40, 
+                                            bg="#e94560", highlightthickness=0)
+                    ghost_canvas.pack(pady=(2, 0))
+                    ghost_canvas.create_rectangle(2, 2, 38, 38, fill="#0078D4", outline="")
+                    letter = shortcut_name[0].upper() if shortcut_name else "?"
+                    ghost_canvas.create_text(20, 20, text=letter, fill="white", 
+                                           font=("Segoe UI", 14, "bold"))
+                    
+                    # Name
+                    short_name = shortcut_name[:8] + "…" if len(shortcut_name) > 8 else shortcut_name
+                    tk.Label(ghost_frame, text=short_name, font=("Segoe UI", 7),
+                            bg="#e94560", fg="white").pack()
+                    
+                    return ghost
+                
+                def on_motion(e):
+                    dx = abs(e.x_root - drag_data['start_x'])
+                    dy = abs(e.y_root - drag_data['start_y'])
+                    
+                    if dx > 15 or dy > 15:
+                        if not drag_data['dragging']:
+                            # Drag beginnt - Geister-Fenster erstellen
+                            drag_data['dragging'] = True
+                            drag_data['ghost_window'] = create_ghost_window()
+                            
+                            # Ursprüngliches Icon markieren
+                            frame.config(bg="#4a4a6e")
+                            name_lbl.config(bg="#4a4a6e")
+                            try:
+                                icon_lbl.config(bg="#4a4a6e")
+                            except:
+                                pass
+                        
+                        # Geister-Fenster folgt der Maus
+                        if drag_data['ghost_window']:
+                            drag_data['ghost_window'].geometry(
+                                f"+{e.x_root - 30}+{e.y_root - 35}"
+                            )
+                
+                def on_release(e):
+                    was_dragging = drag_data['dragging']
+                    
+                    # Geister-Fenster zerstören
+                    if drag_data['ghost_window']:
+                        drag_data['ghost_window'].destroy()
+                        drag_data['ghost_window'] = None
+                    
+                    # Farben zurücksetzen
                     frame.config(bg="#1a1a2e")
                     name_lbl.config(bg="#1a1a2e")
                     try:
                         icon_lbl.config(bg="#1a1a2e")
                     except:
                         pass
-                
-                def on_press(e):
-                    drag_data['start_x'] = e.x_root
-                    drag_data['start_y'] = e.y_root
+                    
                     drag_data['dragging'] = False
-                
-                def on_motion(e):
-                    dx = abs(e.x_root - drag_data['start_x'])
-                    dy = abs(e.y_root - drag_data['start_y'])
-                    if dx > 15 or dy > 15:
-                        drag_data['dragging'] = True
-                        # Visuelles Feedback
-                        frame.config(bg="#e94560")
-                        name_lbl.config(bg="#e94560")
-                
-                def on_release(e):
-                    if drag_data['dragging']:
-                        # Drag beendet - auf Desktop wiederherstellen
-                        print(f"Drag-Out erkannt für: {shortcut_name}")
-                        self.restore_to_desktop(idx)
+                    drag_data['active'] = False
+                    
+                    if was_dragging:
+                        # Drag beendet - auf Desktop an Mausposition wiederherstellen
+                        drop_x = e.x_root
+                        drop_y = e.y_root
+                        print(f"Drag-Out erkannt für: {shortcut_name} an Position ({drop_x}, {drop_y})")
+                        self.restore_to_desktop_at_position(idx, drop_x, drop_y)
                     else:
                         # Normaler Klick - Programm starten
                         self.launch_shortcut(path)
-                    drag_data['dragging'] = False
                 
                 def on_right_click(e):
                     self.show_item_context_menu(e, idx, path)
@@ -1103,6 +1446,10 @@ class FolderTile:
     
     def restore_to_desktop(self, index):
         """Stellt Verknüpfung auf Desktop wieder her (macht sie sichtbar)"""
+        self.restore_to_desktop_at_position(index, None, None)
+    
+    def restore_to_desktop_at_position(self, index, drop_x=None, drop_y=None):
+        """Stellt Verknüpfung auf Desktop an bestimmter Position wieder her"""
         shortcuts = self.config.get("shortcuts", [])
         if 0 <= index < len(shortcuts):
             filepath = shortcuts[index]["path"]
@@ -1116,6 +1463,20 @@ class FolderTile:
                 print(f"  ✓ Hidden-Attribut entfernt")
             else:
                 print(f"  ✗ Fehler beim Entfernen des Hidden-Attributs")
+            
+            # Versuche Icon-Position auf dem Desktop zu setzen
+            if drop_x is not None and drop_y is not None:
+                print(f"  → Drop-Position: ({drop_x}, {drop_y})")
+                
+                # Versuche Icon-Position zu setzen (Windows ListView API)
+                # Übergebe die Raw Screen-Koordinaten - die Funktion handhabt Multi-Monitor
+                success = WindowsDesktopAPI.set_desktop_icon_position(
+                    Path(filepath).name, drop_x, drop_y
+                )
+                if success:
+                    print(f"  ✓ Icon-Position gesetzt")
+                else:
+                    print(f"  ⚠ Icon-Position konnte nicht gesetzt werden (Windows-Einschränkung)")
             
             WindowsDesktopAPI.refresh_desktop()
             
@@ -1278,8 +1639,9 @@ class FolderTile:
         self.draw_tile_icon()
         self.animation_running = False
         
-        # Zurück in den Hintergrund
+        # Zurück in den Hintergrund und Transparenz zurücksetzen
         self.window.attributes("-topmost", False)
+        self.window.attributes("-alpha", 0.75)  # Zurück zur Basis-Transparenz
         self.window.after(100, self.move_to_background)
     
     def animate_size(self, from_w, from_h, to_w, to_h, x, y, callback=None):
