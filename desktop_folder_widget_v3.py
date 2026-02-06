@@ -1245,8 +1245,9 @@ class FolderTile:
         self.hwnd = None
         self.is_embedded = False
 
-        # Zoom-Einstellung: 10-150% (Standard: 100%)
-        self.tile_scale = self.config.get("tile_scale", 100)
+        # Zoom-Einstellungen: getrennt für verkleinert/expandiert (10-150%)
+        self.collapsed_scale = self.config.get("collapsed_scale", 100)
+        self.expanded_scale = self.config.get("expanded_scale", 100)
 
         # Basis-Größen (bei 100%)
         self._base_tile_width = DESKTOP_GRID_X * 2   # 150
@@ -1260,12 +1261,13 @@ class FolderTile:
         self.create_window()
 
     def apply_scale(self):
-        """Berechnet die skalierten Größen basierend auf tile_scale (10-150%)"""
-        s = max(10, min(150, self.tile_scale)) / 100.0
-        self.tile_width = max(40, int(self._base_tile_width * s))
-        self.tile_height = max(40, int(self._base_tile_height * s))
-        self.expanded_width = max(80, int(self._base_expanded_width * s))
-        self.expanded_height = max(100, int(self._base_expanded_height * s))
+        """Berechnet die skalierten Größen basierend auf collapsed_scale / expanded_scale"""
+        sc = max(10, min(150, self.collapsed_scale)) / 100.0
+        se = max(10, min(150, self.expanded_scale)) / 100.0
+        self.tile_width = max(40, int(self._base_tile_width * sc))
+        self.tile_height = max(40, int(self._base_tile_height * sc))
+        self.expanded_width = max(80, int(self._base_expanded_width * se))
+        self.expanded_height = max(100, int(self._base_expanded_height * se))
     
     def create_window(self):
         """Erstellt das Kachel-Fenster mit Glaseffekt und echt transparenten Ecken"""
@@ -1551,7 +1553,7 @@ class FolderTile:
                 rel_x = mx - frame_x
                 rel_y = my - frame_y
                 
-                _s = self.tile_scale / 100.0
+                _s = self.expanded_scale / 100.0
                 cols = 3
                 cell_width = max(30, int(70 * _s))
                 cell_height = max(30, int(65 * _s))
@@ -1626,7 +1628,7 @@ class FolderTile:
         self.canvas.delete("all")
         self.icon_images.clear()
 
-        s = self.tile_scale / 100.0
+        s = self.collapsed_scale / 100.0
         shortcuts = self.config.get("shortcuts", [])
         width = self.tile_width
         height = self.tile_height
@@ -1695,7 +1697,7 @@ class FolderTile:
         available_height = height - 25
 
         # Icon-Größe skaliert (Basis 48 bei 100%)
-        s = self.tile_scale / 100.0
+        s = self.collapsed_scale / 100.0
         icon_size = max(16, int(48 * s))
         cell_width = width // 2
         cell_height = available_height // 2
@@ -1941,7 +1943,7 @@ class FolderTile:
         hover_bg = "#1e1e3a"
         active_bg = "#2a2a4a"
 
-        s = self.tile_scale / 100.0
+        s = self.expanded_scale / 100.0
         cols = 3
         icon_size = max(16, int(36 * s))
         cell_width = max(30, int(70 * s))
@@ -2445,29 +2447,9 @@ class FolderTile:
                        activebackground="#2a2a5a", activeforeground="white",
                        relief="flat", bd=0)
 
-        # === Größen-Untermenü (Zoom) — in beiden Zuständen verfügbar ===
-        size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
-                            activebackground="#2a2a5a", activeforeground="white",
-                            relief="flat", bd=0)
-        size_menu.add_command(
-            label="🔍+ Vergrößern (+10%)",
-            command=lambda: self.set_tile_scale(self.tile_scale + 10)
-        )
-        size_menu.add_command(
-            label="🔍− Verkleinern (−10%)",
-            command=lambda: self.set_tile_scale(self.tile_scale - 10)
-        )
-        size_menu.add_separator()
-        for pct in [50, 75, 100, 125, 150]:
-            check = "✔ " if self.tile_scale == pct else "   "
-            size_menu.add_command(
-                label=f"{check}{pct}%",
-                command=lambda p=pct: self.set_tile_scale(p)
-            )
-
         if self.is_expanded:
             # === Kontextmenü für expandierte Kachel ===
-            menu.add_cascade(label=f"📏 Größe ({self.tile_scale}%)", menu=size_menu)
+            menu.add_command(label="📏 Größe anpassen…", command=self.show_size_dialog)
             menu.add_separator()
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
             menu.add_separator()
@@ -2480,7 +2462,7 @@ class FolderTile:
             menu.add_command(label="📂 Öffnen", command=self.expand)
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
             menu.add_separator()
-            menu.add_cascade(label=f"📏 Größe ({self.tile_scale}%)", menu=size_menu)
+            menu.add_command(label="📏 Größe anpassen…", command=self.show_size_dialog)
             menu.add_separator()
             menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
             menu.add_separator()
@@ -2491,50 +2473,143 @@ class FolderTile:
 
         menu.tk_popup(event.x_root, event.y_root)
 
-    def set_tile_scale(self, new_scale):
-        """Setzt den Zoom-Level der Kachel (10-150%)"""
-        new_scale = max(10, min(150, new_scale))
-        self.tile_scale = new_scale
-        self.config["tile_scale"] = new_scale
+    def show_size_dialog(self):
+        """Öffnet Slider-Dialog zur Größeneinstellung (verkleinert + expandiert getrennt)"""
+        dlg = tk.Toplevel(self.window)
+        dlg.title("Kachelgröße")
+        dlg.overrideredirect(True)
+        dlg.attributes("-topmost", True)
+        dlg.config(bg="#12122a")
+
+        # Zentriert neben der Kachel positionieren
+        dlg_w, dlg_h = 260, 200
+        wx = self.window.winfo_x() + self.window.winfo_width() + 8
+        wy = self.window.winfo_y()
+        dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
+
+        style_fg = "#d0d0e0"
+        style_bg = "#12122a"
+        slider_trough = "#2a2a5a"
+        slider_fg = "#6a6aff"
+
+        # --- Titel ---
+        tk.Label(
+            dlg, text="Kachelgröße", font=("Segoe UI Semibold", 11),
+            bg=style_bg, fg=style_fg
+        ).pack(pady=(10, 6))
+
+        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15)
+
+        # --- Slider: Verkleinert ---
+        frame_c = tk.Frame(dlg, bg=style_bg)
+        frame_c.pack(fill="x", padx=18, pady=(10, 2))
+
+        collapsed_label = tk.Label(
+            frame_c, text=f"Verkleinert: {self.collapsed_scale}%",
+            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
+        )
+        collapsed_label.pack(fill="x")
+
+        collapsed_var = tk.IntVar(value=self.collapsed_scale)
+        collapsed_slider = tk.Scale(
+            frame_c, from_=10, to=150, orient="horizontal",
+            variable=collapsed_var, showvalue=False,
+            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
+            highlightthickness=0, bd=0, sliderrelief="flat",
+            activebackground=slider_fg, length=220
+        )
+        collapsed_slider.pack(fill="x")
+
+        # --- Slider: Expandiert ---
+        frame_e = tk.Frame(dlg, bg=style_bg)
+        frame_e.pack(fill="x", padx=18, pady=(6, 2))
+
+        expanded_label = tk.Label(
+            frame_e, text=f"Expandiert: {self.expanded_scale}%",
+            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
+        )
+        expanded_label.pack(fill="x")
+
+        expanded_var = tk.IntVar(value=self.expanded_scale)
+        expanded_slider = tk.Scale(
+            frame_e, from_=10, to=150, orient="horizontal",
+            variable=expanded_var, showvalue=False,
+            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
+            highlightthickness=0, bd=0, sliderrelief="flat",
+            activebackground=slider_fg, length=220
+        )
+        expanded_slider.pack(fill="x")
+
+        # --- Live-Update bei Slider-Änderung ---
+        def on_collapsed_change(*_):
+            val = collapsed_var.get()
+            collapsed_label.config(text=f"Verkleinert: {val}%")
+            self._apply_collapsed_scale(val)
+
+        def on_expanded_change(*_):
+            val = expanded_var.get()
+            expanded_label.config(text=f"Expandiert: {val}%")
+            self._apply_expanded_scale(val)
+
+        collapsed_var.trace_add("write", on_collapsed_change)
+        expanded_var.trace_add("write", on_expanded_change)
+
+        # --- Schließen bei Klick außerhalb ---
+        def on_focus_out(e):
+            try:
+                # Prüfe ob der Fokus noch im Dialog ist
+                focused = dlg.focus_get()
+                if focused and str(focused).startswith(str(dlg)):
+                    return
+            except:
+                pass
+            dlg.destroy()
+
+        dlg.bind("<FocusOut>", on_focus_out)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.focus_force()
+
+    def _apply_collapsed_scale(self, val):
+        """Wendet den Verkleinert-Zoom live an"""
+        val = max(10, min(150, val))
+        self.collapsed_scale = val
+        self.config["collapsed_scale"] = val
         self.manager.save_config()
 
         # Caches invalidieren
         self._normal_bg_photo = None
         self._hover_bg_photo = None
 
-        was_expanded = self.is_expanded
-
-        # Falls expandiert: zuklappen, Größe ändern, wieder expandieren
-        if was_expanded:
-            # expanded_frame zerstören
-            self.animation_running = False
-            self.is_expanded = False
-            if self.expanded_frame:
-                self.expanded_frame.destroy()
-                self.expanded_frame = None
-            self.canvas.pack(fill="both", expand=True)
-
-        # Neue Größen berechnen
         self.apply_scale()
 
-        # Canvas und Fenster auf neue Größe setzen
-        self.canvas.config(width=self.tile_width, height=self.tile_height)
-        x = self.window.winfo_x()
-        y = self.window.winfo_y()
-        self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
-        self.apply_rounded_corners(self.tile_width, self.tile_height)
+        if not self.is_expanded:
+            # Collapsed: sofort Fenster + Canvas anpassen
+            self.canvas.config(width=self.tile_width, height=self.tile_height)
+            x = self.window.winfo_x()
+            y = self.window.winfo_y()
+            self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
+            self.apply_rounded_corners(self.tile_width, self.tile_height)
+            self.draw_tile_icon()
+            if self.hwnd:
+                enable_acrylic_blur(self.hwnd, 0xB0201A0D)
 
-        # Neu zeichnen
-        self.draw_tile_icon()
+    def _apply_expanded_scale(self, val):
+        """Wendet den Expandiert-Zoom live an"""
+        val = max(10, min(150, val))
+        self.expanded_scale = val
+        self.config["expanded_scale"] = val
+        self.manager.save_config()
 
-        # Blur aktualisieren
-        if self.hwnd:
-            blur_color = 0xB0201A0D
-            enable_acrylic_blur(self.hwnd, blur_color)
+        self.apply_scale()
 
-        # Falls vorher expandiert war, wieder expandieren
-        if was_expanded:
-            self.window.after(100, self.expand)
+        if self.is_expanded:
+            # Expandiert: Fenster anpassen und Inhalt neu aufbauen
+            x = self.window.winfo_x()
+            y = self.window.winfo_y()
+            self.window.geometry(f"{self.expanded_width}x{self.expanded_height}+{x}+{y}")
+            self.apply_rounded_corners(self.expanded_width, self.expanded_height)
+            # Icon-Grid im expanded frame neu aufbauen
+            self.refresh_expanded_view()
     
     def restore_all_to_desktop(self):
         """Stellt alle Verknüpfungen auf Desktop wieder her"""
