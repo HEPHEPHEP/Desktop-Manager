@@ -1244,7 +1244,10 @@ class FolderTile:
         self.icon_images = []
         self.hwnd = None
         self.is_embedded = False
-        
+
+        # Größeneinstellung: "small" = verkleinert (Standard), "large" = expandiert
+        self.tile_size = self.config.get("tile_size", "small")
+
         # Größen - 2x2 Desktop-Icons
         self.tile_width = DESKTOP_GRID_X * 2  # 160
         self.tile_height = DESKTOP_GRID_Y * 2  # 180
@@ -1316,6 +1319,10 @@ class FolderTile:
         
         # Fenster sichtbar machen
         self.window.after(100, self.setup_window_mode)
+
+        # Falls Größeneinstellung "large", nach Initialisierung expandieren
+        if self.tile_size == "large":
+            self.window.after(600, self.expand)
     
     def setup_window_mode(self):
         """Macht das Fenster sichtbar, aktiviert Glaseffekt, runde Ecken und hält es im Hintergrund"""
@@ -1474,6 +1481,9 @@ class FolderTile:
         """Wird nach Leave-Verzögerung aufgerufen — klappt zusammen"""
         self._hover_collapse_timer = None
         if self._mouse_inside or not self.is_expanded or self.animation_running:
+            return
+        # Bei Größeneinstellung "large" nicht automatisch zuklappen
+        if self.tile_size == "large":
             return
         self.collapse()
     
@@ -1883,9 +1893,9 @@ class FolderTile:
         scrollbar.pack(side="right", fill="y")
         
         canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-        
+
         shortcuts = self.config.get("shortcuts", [])
-        
+
         if not shortcuts:
             empty = tk.Label(
                 self.icons_frame,
@@ -1894,12 +1904,13 @@ class FolderTile:
                 wraplength=200
             )
             empty.pack(pady=40)
+            empty.bind("<Button-3>", self.show_context_menu)
         else:
             self.create_desktop_icon_grid(shortcuts)
-        
+
         # === Trennlinie + Titel unten (konsistent mit collapsed) ===
         tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=(2, 0))
-        
+
         name = self.config.get("name", "Ordner")
         footer = tk.Label(
             self.expanded_frame, text=name,
@@ -1907,6 +1918,10 @@ class FolderTile:
             anchor="center"
         )
         footer.pack(fill="x", pady=(3, 8))
+
+        # Rechtsklick-Kontextmenü auf Hintergrundflächen der expandierten Ansicht
+        for bg_widget in [self.expanded_frame, grid_container, canvas, self.icons_frame, footer]:
+            bg_widget.bind("<Button-3>", self.show_context_menu)
         
         self.animation_running = False
     
@@ -2086,6 +2101,8 @@ class FolderTile:
                             drag_data['ghost_window'].geometry(
                                 f"+{e.x_root - 30}+{e.y_root - 35}"
                             )
+                            # Andere Kacheln expandieren wenn Cursor darüber
+                            self.expand_tile_under_cursor(e.x_root, e.y_root)
                 
                 def on_release(e):
                     was_dragging = drag_data['dragging']
@@ -2391,23 +2408,82 @@ class FolderTile:
         
         step(1)
     
+    def expand_tile_under_cursor(self, mx, my):
+        """Expandiert eine andere Kachel, wenn der Cursor während eines Drags darüber ist"""
+        for tile_id, tile in self.manager.tiles.items():
+            if tile is self:
+                continue
+            if tile.is_expanded or tile.animation_running:
+                continue
+            try:
+                tx = tile.window.winfo_rootx()
+                ty = tile.window.winfo_rooty()
+                tw = tile.window.winfo_width()
+                th = tile.window.winfo_height()
+                if tx <= mx <= tx + tw and ty <= my <= ty + th:
+                    tile.expand()
+                    return
+            except:
+                pass
+
     def show_context_menu(self, event):
-        """Kontextmenü der Kachel"""
+        """Kontextmenü der Kachel (collapsed und expanded)"""
         menu = tk.Menu(self.window, tearoff=0, bg="#12122a", fg="#d0d0e0",
                        activebackground="#2a2a5a", activeforeground="white",
                        relief="flat", bd=0)
-        
-        menu.add_command(label="📂 Öffnen", command=self.expand)
-        menu.add_command(label="✏️ Umbenennen", command=self.rename)
-        menu.add_separator()
-        menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
-        menu.add_separator()
-        menu.add_command(label="📤 Alle wiederherstellen", command=self.restore_all_to_desktop)
-        menu.add_command(label="🗑️ Kachel löschen", command=self.delete_tile)
-        menu.add_separator()
-        menu.add_command(label="❌ Widget beenden", command=self.manager.quit)
-        
+
+        if self.is_expanded:
+            # === Kontextmenü für expandierte Kachel ===
+            # Größen-Untermenü
+            size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
+                                activebackground="#2a2a5a", activeforeground="white",
+                                relief="flat", bd=0)
+            small_label = "✔ Verkleinert" if self.tile_size == "small" else "   Verkleinert"
+            large_label = "✔ Expandiert" if self.tile_size == "large" else "   Expandiert"
+            size_menu.add_command(label=small_label, command=lambda: self.set_tile_size("small"))
+            size_menu.add_command(label=large_label, command=lambda: self.set_tile_size("large"))
+            menu.add_cascade(label="📏 Größe", menu=size_menu)
+            menu.add_separator()
+            menu.add_command(label="✏️ Umbenennen", command=self.rename)
+            menu.add_separator()
+            menu.add_command(label="📤 Alle wiederherstellen", command=self.restore_all_to_desktop)
+            menu.add_command(label="🗑️ Kachel löschen", command=self.delete_tile)
+            menu.add_separator()
+            menu.add_command(label="❌ Widget beenden", command=self.manager.quit)
+        else:
+            # === Kontextmenü für eingeklappte Kachel ===
+            menu.add_command(label="📂 Öffnen", command=self.expand)
+            menu.add_command(label="✏️ Umbenennen", command=self.rename)
+            menu.add_separator()
+            # Größen-Untermenü auch im collapsed-Zustand
+            size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
+                                activebackground="#2a2a5a", activeforeground="white",
+                                relief="flat", bd=0)
+            small_label = "✔ Verkleinert" if self.tile_size == "small" else "   Verkleinert"
+            large_label = "✔ Expandiert" if self.tile_size == "large" else "   Expandiert"
+            size_menu.add_command(label=small_label, command=lambda: self.set_tile_size("small"))
+            size_menu.add_command(label=large_label, command=lambda: self.set_tile_size("large"))
+            menu.add_cascade(label="📏 Größe", menu=size_menu)
+            menu.add_separator()
+            menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
+            menu.add_separator()
+            menu.add_command(label="📤 Alle wiederherstellen", command=self.restore_all_to_desktop)
+            menu.add_command(label="🗑️ Kachel löschen", command=self.delete_tile)
+            menu.add_separator()
+            menu.add_command(label="❌ Widget beenden", command=self.manager.quit)
+
         menu.tk_popup(event.x_root, event.y_root)
+
+    def set_tile_size(self, size):
+        """Setzt die Größeneinstellung der Kachel (small/large)"""
+        self.tile_size = size
+        self.config["tile_size"] = size
+        self.manager.save_config()
+
+        if size == "large" and not self.is_expanded:
+            self.expand()
+        elif size == "small" and self.is_expanded:
+            self.collapse()
     
     def restore_all_to_desktop(self):
         """Stellt alle Verknüpfungen auf Desktop wieder her"""
