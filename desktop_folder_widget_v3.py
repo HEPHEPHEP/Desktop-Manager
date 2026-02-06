@@ -1251,6 +1251,9 @@ class FolderTile:
         self.collapsed_scale = self.config.get("collapsed_scale", 100)
         self.expanded_scale = self.config.get("expanded_scale", 100)
 
+        # Verknüpfungsnamen in der verkleinerten Ansicht ausblenden (Standard: an)
+        self.hide_shortcut_names = self.config.get("hide_shortcut_names", True)
+
         # Basis-Größen (bei 100%)
         self._base_tile_width = DESKTOP_GRID_X * 2   # 150
         self._base_tile_height = DESKTOP_GRID_Y * 2   # 150
@@ -1610,9 +1613,10 @@ class FolderTile:
             WindowsDesktopAPI.refresh_desktop()
             self.manager.save_config()
             
-            # Hover-Cache invalidieren (neue Icons)
+            # Caches invalidieren (neue Icons)
             self._hover_bg_photo = None
-            
+            self._normal_bg_photo = None
+
             if self.is_expanded:
                 # Expandierte Ansicht aktualisieren
                 self.refresh_expanded_view()
@@ -1695,23 +1699,24 @@ class FolderTile:
     
     def draw_icon_grid(self, shortcuts, width, height):
         """Zeichnet 2x2 Icon-Grid wie Desktop-Icons"""
-        # Verfügbarer Platz (ohne Name unten)
-        available_height = height - 25
+        # Verfügbarer Platz — Name-Bereich unten nur abziehen wenn sichtbar
+        name_reserve = 0 if self.hide_shortcut_names else 25
+        available_height = height - name_reserve
 
         # Icon-Größe skaliert (Basis 48 bei 100%)
         s = self.collapsed_scale / 100.0
         icon_size = max(16, int(48 * s))
         cell_width = width // 2
         cell_height = available_height // 2
-        
+
         for i, shortcut in enumerate(shortcuts[:4]):
             row = i // 2
             col = i % 2
-            
+
             # Zentrierte Position in der Zelle
             cx = col * cell_width + cell_width // 2
             cy = row * cell_height + cell_height // 2
-            
+
             # Icon laden
             icon_img = None
             try:
@@ -1725,43 +1730,44 @@ class FolderTile:
                     self.icon_images.append(icon_img)
             except:
                 pass
-            
+
             if icon_img:
-                self.canvas.create_image(cx, cy - 8, image=icon_img)
+                self.canvas.create_image(cx, cy, image=icon_img)
             else:
                 # Fallback: Farbiges Rechteck
                 ext = Path(shortcut["path"]).suffix.lower()
                 colors = {'.exe': '#0078D4', '.lnk': '#0078D4', '.bat': '#FFA500'}
                 color = colors.get(ext, '#0078D4')
-                
+
                 self.canvas.create_rectangle(
-                    cx - icon_size//2, cy - icon_size//2 - 8,
-                    cx + icon_size//2, cy + icon_size//2 - 8,
+                    cx - icon_size//2, cy - icon_size//2,
+                    cx + icon_size//2, cy + icon_size//2,
                     fill=color, outline=""
                 )
-                
+
                 letter = shortcut["name"][0].upper() if shortcut["name"] else "?"
                 letter_font_size = max(8, int(16 * s))
                 self.canvas.create_text(
-                    cx, cy - 8,
+                    cx, cy,
                     text=letter,
                     fill="white",
                     font=("Segoe UI", letter_font_size, "bold")
                 )
 
-            # Name unter Icon
-            name = shortcut["name"]
-            if len(name) > 8:
-                name = name[:7] + "…"
+            # Name unter Icon (nur wenn nicht ausgeblendet)
+            if not self.hide_shortcut_names:
+                name = shortcut["name"]
+                if len(name) > 8:
+                    name = name[:7] + "…"
 
-            grid_name_font = max(6, int(8 * s))
-            self.canvas.create_text(
-                cx, cy + icon_size//2,
-                text=name,
-                fill="white",
-                font=("Segoe UI", grid_name_font),
-                anchor="n"
-            )
+                grid_name_font = max(6, int(8 * s))
+                self.canvas.create_text(
+                    cx, cy + icon_size//2,
+                    text=name,
+                    fill="white",
+                    font=("Segoe UI", grid_name_font),
+                    anchor="n"
+                )
     
     def on_click(self, event):
         """Klick-Handler — bei collapsed wird manuell expandiert (Fallback)"""
@@ -2540,11 +2546,15 @@ class FolderTile:
                        activebackground="#2a2a5a", activeforeground="white",
                        relief="flat", bd=0)
 
+        # Toggle für Verknüpfungsnamen in verkleinerter Ansicht
+        names_label = "✅ Icon-Namen ausblenden" if self.hide_shortcut_names else "⬜ Icon-Namen ausblenden"
+
         if self.is_expanded:
             # === Kontextmenü für expandierte Kachel ===
             menu.add_command(label="📏 Größe anpassen…", command=self.show_size_dialog)
             menu.add_separator()
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
+            menu.add_command(label=names_label, command=self._toggle_hide_shortcut_names)
             menu.add_separator()
             menu.add_command(label="📤 Alle wiederherstellen", command=self.restore_all_to_desktop)
             menu.add_command(label="🗑️ Kachel löschen", command=self.delete_tile)
@@ -2556,6 +2566,7 @@ class FolderTile:
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
             menu.add_separator()
             menu.add_command(label="📏 Größe anpassen…", command=self.show_size_dialog)
+            menu.add_command(label=names_label, command=self._toggle_hide_shortcut_names)
             menu.add_separator()
             menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
             menu.add_separator()
@@ -2566,6 +2577,15 @@ class FolderTile:
 
         menu.tk_popup(event.x_root, event.y_root)
 
+    def _toggle_hide_shortcut_names(self):
+        """Schaltet das Ausblenden der Verknüpfungsnamen in der verkleinerten Ansicht um"""
+        self.hide_shortcut_names = not self.hide_shortcut_names
+        self.config["hide_shortcut_names"] = self.hide_shortcut_names
+        self.manager.save_config()
+        self._normal_bg_photo = None
+        self._hover_bg_photo = None
+        self.draw_tile_icon()
+
     def show_size_dialog(self):
         """Öffnet Slider-Dialog zur Größeneinstellung (verkleinert + expandiert getrennt)"""
         dlg = tk.Toplevel(self.window)
@@ -2575,7 +2595,7 @@ class FolderTile:
         dlg.config(bg="#12122a")
 
         # Zentriert neben der Kachel positionieren
-        dlg_w, dlg_h = 260, 200
+        dlg_w, dlg_h = 260, 240
         wx = self.window.winfo_x() + self.window.winfo_width() + 8
         wy = self.window.winfo_y()
         dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
@@ -2633,6 +2653,29 @@ class FolderTile:
         )
         expanded_slider.pack(fill="x")
 
+        # --- Checkbox: Icon-Namen ausblenden ---
+        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15, pady=(8, 0))
+
+        hide_names_var = tk.BooleanVar(value=self.hide_shortcut_names)
+        hide_names_cb = tk.Checkbutton(
+            dlg, text="Icon-Namen ausblenden",
+            variable=hide_names_var,
+            font=("Segoe UI", 9), bg=style_bg, fg=style_fg,
+            activebackground=style_bg, activeforeground=style_fg,
+            selectcolor="#2a2a5a", highlightthickness=0, bd=0
+        )
+        hide_names_cb.pack(padx=18, pady=(6, 2), anchor="w")
+
+        def on_hide_names_change(*_):
+            self.hide_shortcut_names = hide_names_var.get()
+            self.config["hide_shortcut_names"] = self.hide_shortcut_names
+            self.manager.save_config()
+            self._normal_bg_photo = None
+            self._hover_bg_photo = None
+            self.draw_tile_icon()
+
+        hide_names_var.trace_add("write", on_hide_names_change)
+
         # --- Live-Update bei Slider-Änderung ---
         def on_collapsed_change(*_):
             val = collapsed_var.get()
@@ -2675,14 +2718,16 @@ class FolderTile:
 
         self.apply_scale()
 
+        # Canvas-Größe und Icon immer aktualisieren (auch wenn expandiert)
+        self.canvas.config(width=self.tile_width, height=self.tile_height)
+        self.draw_tile_icon()
+
         if not self.is_expanded:
-            # Collapsed: sofort Fenster + Canvas anpassen
-            self.canvas.config(width=self.tile_width, height=self.tile_height)
+            # Collapsed: sofort Fenster anpassen
             x = self.window.winfo_x()
             y = self.window.winfo_y()
             self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
             self.apply_rounded_corners(self.tile_width, self.tile_height)
-            self.draw_tile_icon()
             if self.hwnd:
                 enable_acrylic_blur(self.hwnd, 0xB0201A0D)
 
