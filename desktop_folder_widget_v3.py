@@ -1245,16 +1245,27 @@ class FolderTile:
         self.hwnd = None
         self.is_embedded = False
 
-        # Größeneinstellung: "small" = verkleinert (Standard), "large" = expandiert
-        self.tile_size = self.config.get("tile_size", "small")
+        # Zoom-Einstellung: 10-150% (Standard: 100%)
+        self.tile_scale = self.config.get("tile_scale", 100)
 
-        # Größen - 2x2 Desktop-Icons
-        self.tile_width = DESKTOP_GRID_X * 2  # 160
-        self.tile_height = DESKTOP_GRID_Y * 2  # 180
-        self.expanded_width = 245   # 30% kleiner (war 350)
-        self.expanded_height = 280  # 30% kleiner (war 400)
-        
+        # Basis-Größen (bei 100%)
+        self._base_tile_width = DESKTOP_GRID_X * 2   # 150
+        self._base_tile_height = DESKTOP_GRID_Y * 2   # 150
+        self._base_expanded_width = 245
+        self._base_expanded_height = 280
+
+        # Aktuelle Größen (skaliert)
+        self.apply_scale()
+
         self.create_window()
+
+    def apply_scale(self):
+        """Berechnet die skalierten Größen basierend auf tile_scale (10-150%)"""
+        s = max(10, min(150, self.tile_scale)) / 100.0
+        self.tile_width = max(40, int(self._base_tile_width * s))
+        self.tile_height = max(40, int(self._base_tile_height * s))
+        self.expanded_width = max(80, int(self._base_expanded_width * s))
+        self.expanded_height = max(100, int(self._base_expanded_height * s))
     
     def create_window(self):
         """Erstellt das Kachel-Fenster mit Glaseffekt und echt transparenten Ecken"""
@@ -1319,10 +1330,6 @@ class FolderTile:
         
         # Fenster sichtbar machen
         self.window.after(100, self.setup_window_mode)
-
-        # Falls Größeneinstellung "large", nach Initialisierung expandieren
-        if self.tile_size == "large":
-            self.window.after(600, self.expand)
     
     def setup_window_mode(self):
         """Macht das Fenster sichtbar, aktiviert Glaseffekt, runde Ecken und hält es im Hintergrund"""
@@ -1482,9 +1489,6 @@ class FolderTile:
         self._hover_collapse_timer = None
         if self._mouse_inside or not self.is_expanded or self.animation_running:
             return
-        # Bei Größeneinstellung "large" nicht automatisch zuklappen
-        if self.tile_size == "large":
-            return
         self.collapse()
     
     def _draw_hover_state(self, hovered):
@@ -1547,9 +1551,10 @@ class FolderTile:
                 rel_x = mx - frame_x
                 rel_y = my - frame_y
                 
+                _s = self.tile_scale / 100.0
                 cols = 3
-                cell_width = 70
-                cell_height = 65
+                cell_width = max(30, int(70 * _s))
+                cell_height = max(30, int(65 * _s))
                 
                 col = max(0, min(int(rel_x // cell_width), cols - 1))
                 row = max(0, int(rel_y // cell_height))
@@ -1620,7 +1625,8 @@ class FolderTile:
         """Zeichnet das Kachel-Icon mit 3D-Hintergrund, Licht und Schatten"""
         self.canvas.delete("all")
         self.icon_images.clear()
-        
+
+        s = self.tile_scale / 100.0
         shortcuts = self.config.get("shortcuts", [])
         width = self.tile_width
         height = self.tile_height
@@ -1639,20 +1645,21 @@ class FolderTile:
         else:
             self.draw_icon_grid(shortcuts[:4], width, height)
         
-        # Ordnername unten mit Schatten
+        # Ordnername unten mit Schatten (skalierte Schriftgröße)
         name = self.config.get("name", "Ordner")
         if len(name) > 12:
             name = name[:11] + "…"
-        
+
+        name_font_size = max(6, int(9 * s))
         self.canvas.create_text(
             width // 2 + 1, height - 9,
             text=name, fill="#000000",
-            font=("Segoe UI Semibold", 9), anchor="s"
+            font=("Segoe UI Semibold", name_font_size), anchor="s"
         )
         self.canvas.create_text(
             width // 2, height - 10,
             text=name, fill="#e0e0e0",
-            font=("Segoe UI Semibold", 9), anchor="s"
+            font=("Segoe UI Semibold", name_font_size), anchor="s"
         )
     
     def draw_empty_folder(self, width, height):
@@ -1686,9 +1693,10 @@ class FolderTile:
         """Zeichnet 2x2 Icon-Grid wie Desktop-Icons"""
         # Verfügbarer Platz (ohne Name unten)
         available_height = height - 25
-        
-        # Icon-Größe wie auf Desktop
-        icon_size = 48
+
+        # Icon-Größe skaliert (Basis 48 bei 100%)
+        s = self.tile_scale / 100.0
+        icon_size = max(16, int(48 * s))
         cell_width = width // 2
         cell_height = available_height // 2
         
@@ -1729,23 +1737,25 @@ class FolderTile:
                 )
                 
                 letter = shortcut["name"][0].upper() if shortcut["name"] else "?"
+                letter_font_size = max(8, int(16 * s))
                 self.canvas.create_text(
                     cx, cy - 8,
                     text=letter,
                     fill="white",
-                    font=("Segoe UI", 16, "bold")
+                    font=("Segoe UI", letter_font_size, "bold")
                 )
-            
+
             # Name unter Icon
             name = shortcut["name"]
             if len(name) > 8:
                 name = name[:7] + "…"
-            
+
+            grid_name_font = max(6, int(8 * s))
             self.canvas.create_text(
                 cx, cy + icon_size//2,
                 text=name,
                 fill="white",
-                font=("Segoe UI", 8),
+                font=("Segoe UI", grid_name_font),
                 anchor="n"
             )
     
@@ -1930,11 +1940,12 @@ class FolderTile:
         glass_bg = "#0d0d1a"
         hover_bg = "#1e1e3a"
         active_bg = "#2a2a4a"
-        
+
+        s = self.tile_scale / 100.0
         cols = 3
-        icon_size = 36
-        cell_width = 70
-        cell_height = 65
+        icon_size = max(16, int(36 * s))
+        cell_width = max(30, int(70 * s))
+        cell_height = max(30, int(65 * s))
         
         for i, shortcut in enumerate(shortcuts):
             row = i // cols
@@ -1992,23 +2003,25 @@ class FolderTile:
                 
                 # Buchstabe
                 letter = shortcut["name"][0].upper() if shortcut["name"] else "?"
+                exp_letter_font = max(8, int(16 * s))
                 canvas.create_text(
                     icon_size//2, icon_size//2,
                     text=letter,
                     fill="white",
-                    font=("Segoe UI", 16, "bold")
+                    font=("Segoe UI", exp_letter_font, "bold")
                 )
                 icon_label = canvas
-            
+
             # Name (kürzer, keine Umbrüche)
             name = shortcut["name"]
             if len(name) > 10:
                 name = name[:9] + "…"
-            
+
+            exp_name_font = max(6, int(8 * s))
             name_label = tk.Label(
                 icon_frame,
                 text=name,
-                font=("Segoe UI", 8),
+                font=("Segoe UI", exp_name_font),
                 bg=glass_bg,
                 fg="#d0d0e0",
                 anchor="center"
@@ -2432,17 +2445,29 @@ class FolderTile:
                        activebackground="#2a2a5a", activeforeground="white",
                        relief="flat", bd=0)
 
+        # === Größen-Untermenü (Zoom) — in beiden Zuständen verfügbar ===
+        size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
+                            activebackground="#2a2a5a", activeforeground="white",
+                            relief="flat", bd=0)
+        size_menu.add_command(
+            label="🔍+ Vergrößern (+10%)",
+            command=lambda: self.set_tile_scale(self.tile_scale + 10)
+        )
+        size_menu.add_command(
+            label="🔍− Verkleinern (−10%)",
+            command=lambda: self.set_tile_scale(self.tile_scale - 10)
+        )
+        size_menu.add_separator()
+        for pct in [50, 75, 100, 125, 150]:
+            check = "✔ " if self.tile_scale == pct else "   "
+            size_menu.add_command(
+                label=f"{check}{pct}%",
+                command=lambda p=pct: self.set_tile_scale(p)
+            )
+
         if self.is_expanded:
             # === Kontextmenü für expandierte Kachel ===
-            # Größen-Untermenü
-            size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
-                                activebackground="#2a2a5a", activeforeground="white",
-                                relief="flat", bd=0)
-            small_label = "✔ Verkleinert" if self.tile_size == "small" else "   Verkleinert"
-            large_label = "✔ Expandiert" if self.tile_size == "large" else "   Expandiert"
-            size_menu.add_command(label=small_label, command=lambda: self.set_tile_size("small"))
-            size_menu.add_command(label=large_label, command=lambda: self.set_tile_size("large"))
-            menu.add_cascade(label="📏 Größe", menu=size_menu)
+            menu.add_cascade(label=f"📏 Größe ({self.tile_scale}%)", menu=size_menu)
             menu.add_separator()
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
             menu.add_separator()
@@ -2455,15 +2480,7 @@ class FolderTile:
             menu.add_command(label="📂 Öffnen", command=self.expand)
             menu.add_command(label="✏️ Umbenennen", command=self.rename)
             menu.add_separator()
-            # Größen-Untermenü auch im collapsed-Zustand
-            size_menu = tk.Menu(menu, tearoff=0, bg="#12122a", fg="#d0d0e0",
-                                activebackground="#2a2a5a", activeforeground="white",
-                                relief="flat", bd=0)
-            small_label = "✔ Verkleinert" if self.tile_size == "small" else "   Verkleinert"
-            large_label = "✔ Expandiert" if self.tile_size == "large" else "   Expandiert"
-            size_menu.add_command(label=small_label, command=lambda: self.set_tile_size("small"))
-            size_menu.add_command(label=large_label, command=lambda: self.set_tile_size("large"))
-            menu.add_cascade(label="📏 Größe", menu=size_menu)
+            menu.add_cascade(label=f"📏 Größe ({self.tile_scale}%)", menu=size_menu)
             menu.add_separator()
             menu.add_command(label="🆕 Neue Kachel", command=self.manager.create_new_tile)
             menu.add_separator()
@@ -2474,16 +2491,50 @@ class FolderTile:
 
         menu.tk_popup(event.x_root, event.y_root)
 
-    def set_tile_size(self, size):
-        """Setzt die Größeneinstellung der Kachel (small/large)"""
-        self.tile_size = size
-        self.config["tile_size"] = size
+    def set_tile_scale(self, new_scale):
+        """Setzt den Zoom-Level der Kachel (10-150%)"""
+        new_scale = max(10, min(150, new_scale))
+        self.tile_scale = new_scale
+        self.config["tile_scale"] = new_scale
         self.manager.save_config()
 
-        if size == "large" and not self.is_expanded:
-            self.expand()
-        elif size == "small" and self.is_expanded:
-            self.collapse()
+        # Caches invalidieren
+        self._normal_bg_photo = None
+        self._hover_bg_photo = None
+
+        was_expanded = self.is_expanded
+
+        # Falls expandiert: zuklappen, Größe ändern, wieder expandieren
+        if was_expanded:
+            # expanded_frame zerstören
+            self.animation_running = False
+            self.is_expanded = False
+            if self.expanded_frame:
+                self.expanded_frame.destroy()
+                self.expanded_frame = None
+            self.canvas.pack(fill="both", expand=True)
+
+        # Neue Größen berechnen
+        self.apply_scale()
+
+        # Canvas und Fenster auf neue Größe setzen
+        self.canvas.config(width=self.tile_width, height=self.tile_height)
+        x = self.window.winfo_x()
+        y = self.window.winfo_y()
+        self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
+        self.apply_rounded_corners(self.tile_width, self.tile_height)
+
+        # Neu zeichnen
+        self.draw_tile_icon()
+
+        # Blur aktualisieren
+        if self.hwnd:
+            blur_color = 0xB0201A0D
+            enable_acrylic_blur(self.hwnd, blur_color)
+
+        # Falls vorher expandiert war, wieder expandieren
+        if was_expanded:
+            self.window.after(100, self.expand)
     
     def restore_all_to_desktop(self):
         """Stellt alle Verknüpfungen auf Desktop wieder her"""
@@ -2546,8 +2597,12 @@ class DesktopFolderManager:
         # Kacheln erstellen
         for tile_id, tile_config in self.config["tiles"].items():
             self.tiles[tile_id] = FolderTile(self, tile_id, tile_config)
-        
+
         self.check_dependencies()
+
+        # Drag-Erkennung: Periodisch prüfen ob Maus mit gedrückter Taste über Kachel ist
+        self._drag_expand_timer = None
+        self.start_drag_detection()
     
     def check_dependencies(self):
         """Prüft Abhängigkeiten"""
@@ -2558,10 +2613,50 @@ class DesktopFolderManager:
             missing.append("pywin32 + Pillow")
         if not HAS_SHELL:
             missing.append("pywin32 (Shell)")
-        
+
         if missing:
             print(f"\n⚠️ Fehlende Abhängigkeiten: {', '.join(missing)}")
             print("   pip install windnd pywin32 Pillow\n")
+
+    def start_drag_detection(self):
+        """Startet periodische Drag-Erkennung für externe Datei-Drags"""
+        self._check_drag_over_tiles()
+
+    def _check_drag_over_tiles(self):
+        """Prüft ob die Maus mit gedrückter Taste über einer eingeklappten Kachel ist"""
+        try:
+            # Linke Maustaste gedrückt? (GetAsyncKeyState Bit 0x8000 = gedrückt)
+            lmb_state = user32.GetAsyncKeyState(0x01)  # VK_LBUTTON
+            if lmb_state & 0x8000:
+                # Mausposition holen
+                point = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(point))
+                mx, my = point.x, point.y
+
+                # Prüfe ob irgendeine Kachel gerade gedraggt wird (Tile-Verschiebung)
+                any_dragging = any(
+                    t.drag_data.get("dragging", False) for t in self.tiles.values()
+                )
+                if not any_dragging:
+                    # Prüfe alle Kacheln
+                    for tile_id, tile in self.tiles.items():
+                        if tile.is_expanded or tile.animation_running:
+                            continue
+                        try:
+                            tx = tile.window.winfo_rootx()
+                            ty = tile.window.winfo_rooty()
+                            tw = tile.window.winfo_width()
+                            th = tile.window.winfo_height()
+                            if tx <= mx <= tx + tw and ty <= my <= ty + th:
+                                tile.expand()
+                                break
+                        except:
+                            pass
+        except:
+            pass
+
+        # Alle 200ms erneut prüfen
+        self._drag_expand_timer = self.root.after(200, self._check_drag_over_tiles)
     
     def load_config(self):
         """Lädt Konfiguration"""
