@@ -1244,6 +1244,8 @@ class FolderTile:
         self.icon_images = []
         self.hwnd = None
         self.is_embedded = False
+        self._footer_label = None
+        self._name_entry = None
 
         # Zoom-Einstellungen: getrennt für verkleinert/expandiert (10-150%)
         self.collapsed_scale = self.config.get("collapsed_scale", 100)
@@ -1846,64 +1848,33 @@ class FolderTile:
     def show_expanded_content(self):
         """Zeigt Desktop-ähnliche Icon-Ansicht — Titel unten wie collapsed"""
         self.canvas.pack_forget()
-        
+
         glass_bg = "#0d0d1a"
-        
+
         self.expanded_frame = tk.Frame(self.main_frame, bg=glass_bg)
         self.expanded_frame.pack(fill="both", expand=True)
-        
+
         # Acrylic Blur für expandiertes Fenster
         if self.hwnd:
             blur_color = 0xC0281E10
             enable_acrylic_blur(self.hwnd, blur_color)
-        
-        # === Obere Leiste: nur Drag-Handle + Schließen-Button ===
-        header = tk.Frame(self.expanded_frame, bg=glass_bg, cursor="hand2", height=28)
-        header.pack(fill="x", padx=8, pady=(6, 0))
-        header.pack_propagate(False)
-        
-        header.bind("<ButtonPress-1>", self.start_header_drag)
-        header.bind("<B1-Motion>", self.do_header_drag)
-        header.bind("<ButtonRelease-1>", self.stop_header_drag)
-        
-        # Drag-Indikator (dezente Punkte)
-        drag_hint = tk.Label(
-            header, text="⋯", font=("Segoe UI", 10),
-            bg=glass_bg, fg="#444460", cursor="hand2"
-        )
-        drag_hint.pack(side="left", padx=4)
-        drag_hint.bind("<ButtonPress-1>", self.start_header_drag)
-        drag_hint.bind("<B1-Motion>", self.do_header_drag)
-        drag_hint.bind("<ButtonRelease-1>", self.stop_header_drag)
-        
-        close_btn = tk.Label(
-            header, text="✕", font=("Segoe UI", 11),
-            bg=glass_bg, fg="#666680", cursor="hand2"
-        )
-        close_btn.pack(side="right")
-        close_btn.bind("<Button-1>", lambda e: self.collapse())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#ff4466"))
-        close_btn.bind("<Leave>", lambda e: close_btn.config(fg="#666680"))
-        
-        # Trennlinie
-        tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=2)
-        
-        # === Icon-Grid Container ===
+
+        # === Icon-Grid Container (kein Header — homogen mit collapsed) ===
         grid_container = tk.Frame(self.expanded_frame, bg=glass_bg)
-        grid_container.pack(fill="both", expand=True, padx=5, pady=(3, 0))
-        
+        grid_container.pack(fill="both", expand=True, padx=5, pady=(8, 0))
+
         canvas = tk.Canvas(grid_container, bg=glass_bg, highlightthickness=0)
         scrollbar = tk.Scrollbar(grid_container, orient="vertical", command=canvas.yview)
-        
+
         self.icons_frame = tk.Frame(canvas, bg=glass_bg)
         self.icons_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        
+
         canvas.create_window((0, 0), window=self.icons_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
+
         canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
         shortcuts = self.config.get("shortcuts", [])
@@ -1917,6 +1888,9 @@ class FolderTile:
             )
             empty.pack(pady=40)
             empty.bind("<Button-3>", self.show_context_menu)
+            empty.bind("<ButtonPress-1>", self._start_bg_drag)
+            empty.bind("<B1-Motion>", self._do_bg_drag)
+            empty.bind("<ButtonRelease-1>", self._stop_bg_drag)
         else:
             self.create_desktop_icon_grid(shortcuts)
 
@@ -1924,17 +1898,24 @@ class FolderTile:
         tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=(2, 0))
 
         name = self.config.get("name", "Ordner")
-        footer = tk.Label(
+        self._footer_label = tk.Label(
             self.expanded_frame, text=name,
             font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
-            anchor="center"
+            anchor="center", cursor="hand2"
         )
-        footer.pack(fill="x", pady=(3, 8))
+        self._footer_label.pack(fill="x", pady=(3, 8))
+        self._footer_label.bind("<Button-1>", lambda e: self._start_name_edit())
+
+        # Drag per Klicken-und-Halten auf freie Flächen
+        for bg_widget in [self.expanded_frame, grid_container, canvas, self.icons_frame]:
+            bg_widget.bind("<ButtonPress-1>", self._start_bg_drag)
+            bg_widget.bind("<B1-Motion>", self._do_bg_drag)
+            bg_widget.bind("<ButtonRelease-1>", self._stop_bg_drag)
 
         # Rechtsklick-Kontextmenü auf Hintergrundflächen der expandierten Ansicht
-        for bg_widget in [self.expanded_frame, grid_container, canvas, self.icons_frame, footer]:
+        for bg_widget in [self.expanded_frame, grid_container, canvas, self.icons_frame, self._footer_label]:
             bg_widget.bind("<Button-3>", self.show_context_menu)
-        
+
         self.animation_running = False
     
     def create_desktop_icon_grid(self, shortcuts):
@@ -2304,7 +2285,119 @@ class FolderTile:
     def stop_drag_header(self, event):
         """Alias für Kompatibilität"""
         self.stop_header_drag(event)
-    
+
+    # === Drag auf freie Fläche der expandierten Kachel ===
+
+    def _start_bg_drag(self, event):
+        """Drag starten bei Klick auf freie Fläche (expandiert)"""
+        self.drag_data["x"] = event.x_root - self.window.winfo_x()
+        self.drag_data["y"] = event.y_root - self.window.winfo_y()
+        self.drag_data["dragging"] = False
+        self.drag_data["start_x"] = event.x_root
+        self.drag_data["start_y"] = event.y_root
+
+    def _do_bg_drag(self, event):
+        """Drag durchführen auf freie Fläche (expandiert)"""
+        dx = abs(event.x_root - self.drag_data.get("start_x", event.x_root))
+        dy = abs(event.y_root - self.drag_data.get("start_y", event.y_root))
+
+        if dx > 5 or dy > 5:
+            self.drag_data["dragging"] = True
+            x = event.x_root - self.drag_data["x"]
+            y = event.y_root - self.drag_data["y"]
+            self.window.geometry(f"+{x}+{y}")
+
+    def _stop_bg_drag(self, event):
+        """Drag beenden auf freie Fläche — nur Position speichern, kein Collapse"""
+        was_dragging = self.drag_data.get("dragging", False)
+        self.drag_data["dragging"] = False
+
+        if was_dragging:
+            x = self.window.winfo_x()
+            y = self.window.winfo_y()
+            snap_x, snap_y = WindowsDesktopAPI.snap_to_grid(x, y)
+            self.window.geometry(f"+{snap_x}+{snap_y}")
+            self.config["pos_x"] = snap_x
+            self.config["pos_y"] = snap_y
+            self.manager.save_config()
+
+    # === Inline-Umbenennung per Klick auf den Namen ===
+
+    def _start_name_edit(self):
+        """Ersetzt das Footer-Label durch ein Eingabefeld zum Umbenennen"""
+        if not hasattr(self, '_footer_label') or not self._footer_label:
+            return
+
+        glass_bg = "#0d0d1a"
+        current_name = self.config.get("name", "Ordner")
+
+        # Label verstecken
+        self._footer_label.pack_forget()
+
+        # Entry-Widget an gleicher Stelle einfügen
+        self._name_entry = tk.Entry(
+            self.expanded_frame,
+            font=("Segoe UI Semibold", 9),
+            bg="#1a1a34", fg="#e0e0e0",
+            insertbackground="#e0e0e0",
+            relief="flat", justify="center",
+            highlightthickness=1, highlightcolor="#5566aa",
+            highlightbackground="#3a3a5a"
+        )
+        self._name_entry.insert(0, current_name)
+        self._name_entry.pack(fill="x", padx=10, pady=(3, 8))
+        self._name_entry.select_range(0, "end")
+        self._name_entry.focus_set()
+
+        self._name_entry.bind("<Return>", lambda e: self._finish_name_edit())
+        self._name_entry.bind("<Escape>", lambda e: self._cancel_name_edit())
+        self._name_entry.bind("<FocusOut>", lambda e: self._finish_name_edit())
+
+    def _finish_name_edit(self):
+        """Übernimmt den neuen Namen aus dem Eingabefeld"""
+        if not hasattr(self, '_name_entry') or not self._name_entry:
+            return
+
+        new_name = self._name_entry.get().strip()
+        if new_name:
+            self.config["name"] = new_name
+            self.manager.save_config()
+
+        self._name_entry.destroy()
+        self._name_entry = None
+
+        # Footer-Label mit neuem Namen wiederherstellen
+        glass_bg = "#0d0d1a"
+        display_name = self.config.get("name", "Ordner")
+        self._footer_label = tk.Label(
+            self.expanded_frame, text=display_name,
+            font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
+            anchor="center", cursor="hand2"
+        )
+        self._footer_label.pack(fill="x", pady=(3, 8))
+        self._footer_label.bind("<Button-1>", lambda e: self._start_name_edit())
+        self._footer_label.bind("<Button-3>", self.show_context_menu)
+
+        # Auch das minimierte Icon aktualisieren
+        self.draw_tile_icon()
+
+    def _cancel_name_edit(self):
+        """Bricht die Umbenennung ab, stellt altes Label wieder her"""
+        if hasattr(self, '_name_entry') and self._name_entry:
+            self._name_entry.destroy()
+            self._name_entry = None
+
+        glass_bg = "#0d0d1a"
+        name = self.config.get("name", "Ordner")
+        self._footer_label = tk.Label(
+            self.expanded_frame, text=name,
+            font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
+            anchor="center", cursor="hand2"
+        )
+        self._footer_label.pack(fill="x", pady=(3, 8))
+        self._footer_label.bind("<Button-1>", lambda e: self._start_name_edit())
+        self._footer_label.bind("<Button-3>", self.show_context_menu)
+
     def launch_shortcut(self, path):
         """Startet Verknüpfung"""
         try:
