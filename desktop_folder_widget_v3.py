@@ -2796,7 +2796,42 @@ class FolderTile:
             finally:
                 _updating['active'] = False
 
+        def _ensure_collapsed():
+            """Kachel sofort verkleinern (ohne Animation) damit Änderungen sichtbar sind"""
+            if self.is_expanded and not self.animation_running:
+                self.is_expanded = False
+                if self.expanded_frame:
+                    self.expanded_frame.destroy()
+                    self.expanded_frame = None
+                self._expanded_icon_images.clear()
+                self.canvas.pack(fill="both", expand=True)
+                x = self.window.winfo_x()
+                y = self.window.winfo_y()
+                self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
+                self.apply_rounded_corners(self.tile_width, self.tile_height)
+                self._hover_bg_photo = None
+                self.draw_tile_icon()
+                if self.hwnd:
+                    enable_acrylic_blur(self.hwnd, 0xB0201A0D)
+
+        def _ensure_expanded():
+            """Kachel sofort expandieren (ohne Animation) damit Änderungen sichtbar sind"""
+            if not self.is_expanded and not self.animation_running:
+                self.is_expanded = True
+                self.window.attributes("-topmost", True)
+                self.window.attributes("-alpha", 0.96)
+                self.window.lift()
+                x = self.window.winfo_x()
+                y = self.window.winfo_y()
+                self.window.geometry(f"{self.expanded_width}x{self.expanded_height}+{x}+{y}")
+                self.apply_rounded_corners(self.expanded_width, self.expanded_height)
+                if self.hwnd:
+                    enable_acrylic_blur(self.hwnd, 0xC0281E10)
+                self.canvas.pack_forget()
+                self.show_expanded_content()
+
         def refresh_collapsed():
+            _ensure_collapsed()
             self.apply_scale()
             self._normal_bg_photo = None
             self._hover_bg_photo = None
@@ -2812,6 +2847,7 @@ class FolderTile:
             self.manager.save_config()
 
         def refresh_expanded():
+            _ensure_expanded()
             self.apply_scale()
             if self.is_expanded:
                 x = self.window.winfo_x()
@@ -2822,12 +2858,14 @@ class FolderTile:
             self.manager.save_config()
 
         def refresh_collapsed_icons():
+            _ensure_collapsed()
             self._normal_bg_photo = None
             self._hover_bg_photo = None
             self.draw_tile_icon()
             self.manager.save_config()
 
         def refresh_expanded_icons():
+            _ensure_expanded()
             if self.is_expanded:
                 self.refresh_expanded_view()
             self.manager.save_config()
@@ -2874,6 +2912,7 @@ class FolderTile:
 
         # Schriftgröße
         def on_fn_c_change(*_):
+            _ensure_collapsed()
             val = fn_c_var.get()
             fn_c_lbl.config(text=f"Verkleinert: {val}pt")
             self.collapsed_name_font_size = val
@@ -2884,6 +2923,7 @@ class FolderTile:
             self.manager.save_config()
 
         def on_fn_e_change(*_):
+            _ensure_expanded()
             val = fn_e_var.get()
             fn_e_lbl.config(text=f"Expandiert: {val}pt")
             self.expanded_name_font_size = val
