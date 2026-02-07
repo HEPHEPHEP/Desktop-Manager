@@ -16,6 +16,7 @@ import sys
 import os
 import json
 import subprocess
+import random
 from pathlib import Path
 import ctypes
 from ctypes import wintypes
@@ -519,7 +520,10 @@ def pil_to_qpixmap(pil_image):
 
 class FrostedGlassWidget(QWidget):
     """Basis-Widget mit Frosted Glass Effekt"""
-    
+
+    # Gemeinsame Noise-Textur (wird einmal generiert und wiederverwendet)
+    _shared_noise = None
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -528,11 +532,33 @@ class FrostedGlassWidget(QWidget):
             Qt.WindowType.Tool |
             Qt.WindowType.WindowStaysOnTopHint
         )
-        
+
         self._blur_enabled = False
         self._corner_radius = 16
-        self._background_color = QColor(13, 13, 26, 200)
-        self._border_color = QColor(60, 60, 90, 100)
+        self._background_color = QColor(255, 255, 255, 18)
+        self._border_color = QColor(255, 255, 255, 50)
+
+        # Noise-Textur generieren (einmalig pro Klasse)
+        if FrostedGlassWidget._shared_noise is None:
+            FrostedGlassWidget._shared_noise = self._generate_noise_texture(512, 512)
+
+    @staticmethod
+    def _generate_noise_texture(width, height):
+        """Generiert eine subtile Noise-Textur für den Frosted-Glass-Effekt"""
+        noise_img = QImage(width, height, QImage.Format.Format_ARGB32)
+        noise_img.fill(QColor(0, 0, 0, 0))
+
+        rng = random.Random(42)  # Deterministisch für Konsistenz
+        for y in range(height):
+            for x in range(width):
+                if rng.random() < 0.4:
+                    alpha = rng.randint(3, 12)
+                    if rng.random() < 0.5:
+                        noise_img.setPixelColor(x, y, QColor(255, 255, 255, alpha))
+                    else:
+                        noise_img.setPixelColor(x, y, QColor(0, 0, 0, alpha))
+
+        return QPixmap.fromImage(noise_img)
     
     def showEvent(self, event):
         """Aktiviert Blur-Effekt wenn Fenster angezeigt wird"""
@@ -553,8 +579,8 @@ class FrostedGlassWidget(QWidget):
             return
         
         # Fallback: Acrylic Blur
-        # AABBGGRR - dunkles Blau mit Transparenz
-        gradient_color = 0xC00D0D1A
+        # AABBGGRR - helles Frosted Glass mit hoher Transparenz
+        gradient_color = 0x44FFFFFF
         if enable_acrylic_blur(hwnd, gradient_color):
             print("✓ Acrylic Blur aktiviert")
             self._blur_enabled = True
@@ -572,31 +598,68 @@ class FrostedGlassWidget(QWidget):
         """Zeichnet den Frosted Glass Hintergrund"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Abgerundeter Pfad
+        w, h = self.width(), self.height()
+        r = self._corner_radius
+
+        # Abgerundeter Clip-Pfad
         path = QPainterPath()
-        path.addRoundedRect(0, 0, self.width(), self.height(), 
-                           self._corner_radius, self._corner_radius)
-        
-        # Hintergrund
+        path.addRoundedRect(0, 0, w, h, r, r)
+        painter.setClipPath(path)
+
+        # 1) Halbtransparenter Hintergrund (leichter Tint über dem Blur)
         painter.fillPath(path, QBrush(self._background_color))
-        
-        # Glaseffekt-Gradient (Licht von oben)
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor(255, 255, 255, 25))
-        gradient.setColorAt(0.3, QColor(255, 255, 255, 8))
-        gradient.setColorAt(1, QColor(0, 0, 0, 20))
-        painter.fillPath(path, QBrush(gradient))
-        
-        # Rand
-        painter.setPen(QPen(self._border_color, 1))
+
+        # 2) Glaseffekt-Gradient: starker Highlight oben, Schatten unten
+        glass_grad = QLinearGradient(0, 0, 0, h)
+        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 50))
+        glass_grad.setColorAt(0.15, QColor(255, 255, 255, 22))
+        glass_grad.setColorAt(0.5, QColor(255, 255, 255, 6))
+        glass_grad.setColorAt(0.85, QColor(0, 0, 0, 8))
+        glass_grad.setColorAt(1.0, QColor(0, 0, 0, 20))
+        painter.fillPath(path, QBrush(glass_grad))
+
+        # 3) Diagonaler Lichtreflex (Glanzeffekt)
+        reflex_grad = QLinearGradient(0, 0, w, h * 0.6)
+        reflex_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
+        reflex_grad.setColorAt(0.3, QColor(255, 255, 255, 8))
+        reflex_grad.setColorAt(0.5, QColor(255, 255, 255, 0))
+        reflex_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.fillPath(path, QBrush(reflex_grad))
+
+        # 4) Noise-Textur für Frosted-Effekt
+        if FrostedGlassWidget._shared_noise is not None:
+            painter.setOpacity(0.5)
+            noise = FrostedGlassWidget._shared_noise
+            # Noise kacheln über die gesamte Fläche
+            for ny in range(0, h, noise.height()):
+                for nx in range(0, w, noise.width()):
+                    painter.drawPixmap(nx, ny, noise)
+            painter.setOpacity(1.0)
+
+        # Clipping aufheben für Ränder
+        painter.setClipPath(path, Qt.ClipOperation.NoClip)
+
+        # 5) Innerer Highlight-Rand (oberer Bereich)
+        inner_path = QPainterPath()
+        inner_path.addRoundedRect(1, 1, w - 2, h * 0.35, r - 1, r - 1)
+        # Nur den Bereich innerhalb des Hauptpfads füllen
+        combined = path & inner_path
+        painter.fillPath(combined, QBrush(QColor(255, 255, 255, 14)))
+
+        # 6) Innerer Leuchtrand (1px innen, heller oben)
+        inner_border_grad = QLinearGradient(0, 0, 0, h)
+        inner_border_grad.setColorAt(0.0, QColor(255, 255, 255, 70))
+        inner_border_grad.setColorAt(0.5, QColor(255, 255, 255, 20))
+        inner_border_grad.setColorAt(1.0, QColor(255, 255, 255, 10))
+        inner_pen = QPen(QBrush(inner_border_grad), 1.0)
+        painter.setPen(inner_pen)
+        inner_rect = QPainterPath()
+        inner_rect.addRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
+        painter.drawPath(inner_rect)
+
+        # 7) Äußerer Rand
+        painter.setPen(QPen(self._border_color, 1.0))
         painter.drawPath(path)
-        
-        # Innerer Highlight-Rand oben
-        highlight_path = QPainterPath()
-        highlight_path.addRoundedRect(1, 1, self.width() - 2, self.height() // 3,
-                                      self._corner_radius - 1, self._corner_radius - 1)
-        painter.fillPath(highlight_path, QBrush(QColor(255, 255, 255, 12)))
 
 
 # ============================================================================
@@ -636,11 +699,11 @@ class IconWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Hover/Press Hintergrund
+        # Hover/Press Hintergrund (Frosted Glass)
         if self._is_pressed:
-            painter.fillRect(self.rect(), QColor(42, 42, 74, 180))
+            painter.fillRect(self.rect(), QColor(255, 255, 255, 55))
         elif self._is_hovered:
-            painter.fillRect(self.rect(), QColor(30, 30, 58, 150))
+            painter.fillRect(self.rect(), QColor(255, 255, 255, 35))
         
         # Icon zentriert
         icon_x = (self.width() - self.icon_size) // 2
@@ -761,7 +824,7 @@ class FolderTile(FrostedGlassWidget):
         # Name Label
         self.name_label = QLabel(self.config.get("name", "Ordner"))
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.name_label.setStyleSheet("color: #e0e0e0; font-family: 'Segoe UI'; font-size: 9pt;")
+        self.name_label.setStyleSheet("color: #ffffff; font-family: 'Segoe UI'; font-size: 9pt; text-shadow: 0 1px 2px rgba(0,0,0,0.5);")
         self.collapsed_layout.addWidget(self.name_label)
         
         self.main_layout.addWidget(self.collapsed_widget)
@@ -780,7 +843,8 @@ class FolderTile(FrostedGlassWidget):
         self.scroll_area.setStyleSheet("""
             QScrollArea { background: transparent; border: none; }
             QScrollBar:vertical { width: 6px; background: transparent; }
-            QScrollBar::handle:vertical { background: rgba(255,255,255,30); border-radius: 3px; }
+            QScrollBar::handle:vertical { background: rgba(255,255,255,60); border-radius: 3px; min-height: 20px; }
+            QScrollBar::handle:vertical:hover { background: rgba(255,255,255,90); }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
         """)
         
@@ -797,11 +861,11 @@ class FolderTile(FrostedGlassWidget):
         self.footer_label = QLabel(self.config.get("name", "Ordner"))
         self.footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.footer_label.setStyleSheet("""
-            color: #e0e0e0; 
-            font-family: 'Segoe UI Semibold'; 
+            color: #ffffff;
+            font-family: 'Segoe UI Semibold';
             font-size: 10pt;
             padding: 6px;
-            border-top: 1px solid rgba(60, 60, 90, 100);
+            border-top: 1px solid rgba(255, 255, 255, 30);
         """)
         self.footer_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.footer_label.mousePressEvent = self._start_rename
@@ -863,7 +927,7 @@ class FolderTile(FrostedGlassWidget):
         if not shortcuts:
             empty_label = QLabel("Leer\n\nDateien hierher ziehen")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_label.setStyleSheet("color: #555570; font-size: 10pt;")
+            empty_label.setStyleSheet("color: rgba(255, 255, 255, 120); font-size: 10pt;")
             self.icons_layout.addWidget(empty_label, 0, 0, 1, 3)
         else:
             cols = 3
@@ -953,9 +1017,9 @@ class FolderTile(FrostedGlassWidget):
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
-                background-color: rgba(18, 18, 42, 240);
-                color: #d0d0e0;
-                border: 1px solid rgba(60, 60, 90, 100);
+                background-color: rgba(240, 240, 255, 180);
+                color: #1a1a2e;
+                border: 1px solid rgba(255, 255, 255, 120);
                 border-radius: 8px;
                 padding: 4px;
             }
@@ -964,10 +1028,10 @@ class FolderTile(FrostedGlassWidget):
                 border-radius: 4px;
             }
             QMenu::item:selected {
-                background-color: rgba(42, 42, 90, 180);
+                background-color: rgba(255, 255, 255, 120);
             }
         """)
-        
+
         open_action = menu.addAction("▶️ Öffnen")
         restore_action = menu.addAction("📤 Auf Desktop wiederherstellen")
         menu.addSeparator()
@@ -1073,9 +1137,9 @@ class FolderTile(FrostedGlassWidget):
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
-                background-color: rgba(18, 18, 42, 240);
-                color: #d0d0e0;
-                border: 1px solid rgba(60, 60, 90, 100);
+                background-color: rgba(240, 240, 255, 180);
+                color: #1a1a2e;
+                border: 1px solid rgba(255, 255, 255, 120);
                 border-radius: 8px;
                 padding: 4px;
             }
@@ -1084,11 +1148,11 @@ class FolderTile(FrostedGlassWidget):
                 border-radius: 4px;
             }
             QMenu::item:selected {
-                background-color: rgba(42, 42, 90, 180);
+                background-color: rgba(255, 255, 255, 120);
             }
             QMenu::separator {
                 height: 1px;
-                background: rgba(60, 60, 90, 100);
+                background: rgba(0, 0, 0, 20);
                 margin: 4px 8px;
             }
         """)
