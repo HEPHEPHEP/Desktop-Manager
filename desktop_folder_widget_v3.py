@@ -1241,7 +1241,8 @@ class FolderTile:
         self.is_expanded = False
         self.animation_running = False
         self.drag_data = {"x": 0, "y": 0, "dragging": False}
-        self.icon_images = []
+        self._collapsed_icon_images = []
+        self._expanded_icon_images = []
         self.hwnd = None
         self.is_embedded = False
         self._footer_label = None
@@ -1253,6 +1254,10 @@ class FolderTile:
 
         # Verknüpfungsnamen in der verkleinerten Ansicht ausblenden (Standard: an)
         self.hide_shortcut_names = self.config.get("hide_shortcut_names", True)
+
+        # Icon-Größe (Basis-Pixel, Standard 48 für collapsed, 36 für expanded)
+        self.collapsed_icon_size = self.config.get("collapsed_icon_size", 48)
+        self.expanded_icon_size = self.config.get("expanded_icon_size", 36)
 
         # Basis-Größen (bei 100%)
         self._base_tile_width = DESKTOP_GRID_X * 2   # 150
@@ -1632,7 +1637,7 @@ class FolderTile:
     def draw_tile_icon(self):
         """Zeichnet das Kachel-Icon mit 3D-Hintergrund, Licht und Schatten"""
         self.canvas.delete("all")
-        self.icon_images.clear()
+        self._collapsed_icon_images.clear()
 
         s = self.collapsed_scale / 100.0
         shortcuts = self.config.get("shortcuts", [])
@@ -1703,9 +1708,9 @@ class FolderTile:
         name_reserve = 0 if self.hide_shortcut_names else 25
         available_height = height - name_reserve
 
-        # Icon-Größe skaliert (Basis 48 bei 100%)
+        # Icon-Größe skaliert (konfigurierbare Basis, Standard 48)
         s = self.collapsed_scale / 100.0
-        icon_size = max(16, int(48 * s))
+        icon_size = max(16, int(self.collapsed_icon_size * s))
         cell_width = width // 2
         cell_height = available_height // 2
 
@@ -1727,7 +1732,7 @@ class FolderTile:
                     else:
                         pil_img = pil_img.resize((icon_size, icon_size), Image.LANCZOS)
                     icon_img = ImageTk.PhotoImage(pil_img)
-                    self.icon_images.append(icon_img)
+                    self._collapsed_icon_images.append(icon_img)
             except:
                 pass
 
@@ -1903,9 +1908,9 @@ class FolderTile:
         # === Trennlinie + Titel unten (konsistent mit collapsed) ===
         tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=(2, 0))
 
-        name = self.config.get("name", "Ordner")
+        display_name = self._truncated_name(self.expanded_width)
         self._footer_label = tk.Label(
-            self.expanded_frame, text=name,
+            self.expanded_frame, text=display_name,
             font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
             anchor="center", cursor="hand2"
         )
@@ -1923,7 +1928,16 @@ class FolderTile:
             bg_widget.bind("<Button-3>", self.show_context_menu)
 
         self.animation_running = False
-    
+
+    def _truncated_name(self, available_width):
+        """Gibt den Kachelnamen zurück, ggf. gekürzt passend zur verfügbaren Breite"""
+        name = self.config.get("name", "Ordner")
+        # ~7px pro Zeichen bei Segoe UI Semibold 9, abzgl. Padding
+        max_chars = max(6, (available_width - 30) // 7)
+        if len(name) > max_chars:
+            name = name[:max_chars - 1] + "…"
+        return name
+
     def create_desktop_icon_grid(self, shortcuts):
         """Erstellt Desktop-ähnliches Icon-Grid mit Glas-Hover-Effekten"""
         glass_bg = "#0d0d1a"
@@ -1932,7 +1946,7 @@ class FolderTile:
 
         s = self.expanded_scale / 100.0
         cols = 3
-        icon_size = max(16, int(36 * s))
+        icon_size = max(16, int(self.expanded_icon_size * s))
         cell_width = max(30, int(70 * s))
         cell_height = max(30, int(65 * s))
         
@@ -1966,7 +1980,7 @@ class FolderTile:
                     else:
                         pil_img = pil_img.resize((icon_size, icon_size), Image.LANCZOS)
                     icon_img = ImageTk.PhotoImage(pil_img)
-                    self.icon_images.append(icon_img)
+                    self._expanded_icon_images.append(icon_img)
                     icon_label = tk.Label(icon_container, image=icon_img, bg=glass_bg)
             except Exception as e:
                 print(f"Icon-Fehler für {shortcut['name']}: {e}")
@@ -2230,7 +2244,7 @@ class FolderTile:
                 widget.destroy()
             
             # Icon-Images leeren um Speicher freizugeben
-            self.icon_images.clear()
+            self._expanded_icon_images.clear()
             
             shortcuts = self.config.get("shortcuts", [])
             if not shortcuts:
@@ -2373,16 +2387,7 @@ class FolderTile:
         self._name_entry = None
 
         # Footer-Label mit neuem Namen wiederherstellen
-        glass_bg = "#0d0d1a"
-        display_name = self.config.get("name", "Ordner")
-        self._footer_label = tk.Label(
-            self.expanded_frame, text=display_name,
-            font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
-            anchor="center", cursor="hand2"
-        )
-        self._footer_label.pack(fill="x", pady=(3, 8))
-        self._footer_label.bind("<Button-1>", lambda e: self._start_name_edit())
-        self._footer_label.bind("<Button-3>", self.show_context_menu)
+        self._rebuild_footer_label()
 
         # Auch das minimierte Icon aktualisieren
         self.draw_tile_icon()
@@ -2393,10 +2398,14 @@ class FolderTile:
             self._name_entry.destroy()
             self._name_entry = None
 
+        self._rebuild_footer_label()
+
+    def _rebuild_footer_label(self):
+        """Erstellt das Footer-Label mit gekürztem Namen neu"""
         glass_bg = "#0d0d1a"
-        name = self.config.get("name", "Ordner")
+        display_name = self._truncated_name(self.expanded_width)
         self._footer_label = tk.Label(
-            self.expanded_frame, text=name,
+            self.expanded_frame, text=display_name,
             font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
             anchor="center", cursor="hand2"
         )
@@ -2461,7 +2470,8 @@ class FolderTile:
         if self.expanded_frame:
             self.expanded_frame.destroy()
             self.expanded_frame = None
-        
+        self._expanded_icon_images.clear()
+
         self.canvas.pack(fill="both", expand=True)
         
         x = self.window.winfo_x()
@@ -2595,7 +2605,7 @@ class FolderTile:
         dlg.config(bg="#12122a")
 
         # Zentriert neben der Kachel positionieren
-        dlg_w, dlg_h = 260, 240
+        dlg_w, dlg_h = 260, 380
         wx = self.window.winfo_x() + self.window.winfo_width() + 8
         wy = self.window.winfo_y()
         dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
@@ -2609,7 +2619,7 @@ class FolderTile:
         tk.Label(
             dlg, text="Kachelgröße", font=("Segoe UI Semibold", 11),
             bg=style_bg, fg=style_fg
-        ).pack(pady=(10, 6))
+        ).pack(pady=(10, 4))
 
         tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15)
 
@@ -2653,6 +2663,52 @@ class FolderTile:
         )
         expanded_slider.pack(fill="x")
 
+        # --- Trennlinie: Icon-Größe ---
+        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15, pady=(8, 0))
+
+        tk.Label(
+            dlg, text="Icon-Größe", font=("Segoe UI Semibold", 11),
+            bg=style_bg, fg=style_fg
+        ).pack(pady=(6, 4))
+
+        # --- Slider: Icon-Größe Verkleinert ---
+        frame_ci = tk.Frame(dlg, bg=style_bg)
+        frame_ci.pack(fill="x", padx=18, pady=(2, 2))
+
+        ci_label = tk.Label(
+            frame_ci, text=f"Verkleinert: {self.collapsed_icon_size}px",
+            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
+        )
+        ci_label.pack(fill="x")
+
+        ci_var = tk.IntVar(value=self.collapsed_icon_size)
+        tk.Scale(
+            frame_ci, from_=16, to=80, orient="horizontal",
+            variable=ci_var, showvalue=False,
+            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
+            highlightthickness=0, bd=0, sliderrelief="flat",
+            activebackground=slider_fg, length=220
+        ).pack(fill="x")
+
+        # --- Slider: Icon-Größe Expandiert ---
+        frame_ei = tk.Frame(dlg, bg=style_bg)
+        frame_ei.pack(fill="x", padx=18, pady=(2, 2))
+
+        ei_label = tk.Label(
+            frame_ei, text=f"Expandiert: {self.expanded_icon_size}px",
+            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
+        )
+        ei_label.pack(fill="x")
+
+        ei_var = tk.IntVar(value=self.expanded_icon_size)
+        tk.Scale(
+            frame_ei, from_=16, to=80, orient="horizontal",
+            variable=ei_var, showvalue=False,
+            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
+            highlightthickness=0, bd=0, sliderrelief="flat",
+            activebackground=slider_fg, length=220
+        ).pack(fill="x")
+
         # --- Checkbox: Icon-Namen ausblenden ---
         tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15, pady=(8, 0))
 
@@ -2687,8 +2743,29 @@ class FolderTile:
             expanded_label.config(text=f"Expandiert: {val}%")
             self._apply_expanded_scale(val)
 
+        def on_ci_change(*_):
+            val = ci_var.get()
+            ci_label.config(text=f"Verkleinert: {val}px")
+            self.collapsed_icon_size = val
+            self.config["collapsed_icon_size"] = val
+            self.manager.save_config()
+            self._normal_bg_photo = None
+            self._hover_bg_photo = None
+            self.draw_tile_icon()
+
+        def on_ei_change(*_):
+            val = ei_var.get()
+            ei_label.config(text=f"Expandiert: {val}px")
+            self.expanded_icon_size = val
+            self.config["expanded_icon_size"] = val
+            self.manager.save_config()
+            if self.is_expanded:
+                self.refresh_expanded_view()
+
         collapsed_var.trace_add("write", on_collapsed_change)
         expanded_var.trace_add("write", on_expanded_change)
+        ci_var.trace_add("write", on_ci_change)
+        ei_var.trace_add("write", on_ei_change)
 
         # --- Schließen bei Klick außerhalb ---
         def on_focus_out(e):
