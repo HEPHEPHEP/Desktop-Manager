@@ -1248,36 +1248,59 @@ class FolderTile:
         self._footer_label = None
         self._name_entry = None
 
-        # Zoom-Einstellungen: getrennt für verkleinert/expandiert (10-150%)
-        self.collapsed_scale = self.config.get("collapsed_scale", 100)
-        self.expanded_scale = self.config.get("expanded_scale", 100)
+        # --- Kachelgröße in Pixeln (getrennt Breite/Höhe) ---
+        # Rückwärtskompatibilität: alte Prozent-Werte in Pixel umrechnen
+        if "collapsed_tile_w" not in self.config:
+            old_sc = self.config.get("collapsed_scale", 100) / 100.0
+            self.config["collapsed_tile_w"] = max(40, int(150 * old_sc))
+            self.config["collapsed_tile_h"] = max(40, int(150 * old_sc))
+        if "expanded_tile_w" not in self.config:
+            old_se = self.config.get("expanded_scale", 100) / 100.0
+            self.config["expanded_tile_w"] = max(80, int(245 * old_se))
+            self.config["expanded_tile_h"] = max(100, int(280 * old_se))
+        if "collapsed_icon_w" not in self.config:
+            old_size = self.config.get("collapsed_icon_size", 48)
+            self.config["collapsed_icon_w"] = old_size
+            self.config["collapsed_icon_h"] = old_size
+        if "expanded_icon_w" not in self.config:
+            old_size = self.config.get("expanded_icon_size", 36)
+            self.config["expanded_icon_w"] = old_size
+            self.config["expanded_icon_h"] = old_size
+
+        self.collapsed_tile_w = self.config.get("collapsed_tile_w", 150)
+        self.collapsed_tile_h = self.config.get("collapsed_tile_h", 150)
+        self.expanded_tile_w = self.config.get("expanded_tile_w", 245)
+        self.expanded_tile_h = self.config.get("expanded_tile_h", 280)
+
+        self.collapsed_icon_w = self.config.get("collapsed_icon_w", 48)
+        self.collapsed_icon_h = self.config.get("collapsed_icon_h", 48)
+        self.expanded_icon_w = self.config.get("expanded_icon_w", 36)
+        self.expanded_icon_h = self.config.get("expanded_icon_h", 36)
+
+        # Seitenverhältnis beibehalten
+        self.lock_aspect_collapsed_tile = self.config.get("lock_aspect_collapsed_tile", True)
+        self.lock_aspect_expanded_tile = self.config.get("lock_aspect_expanded_tile", True)
+        self.lock_aspect_collapsed_icon = self.config.get("lock_aspect_collapsed_icon", True)
+        self.lock_aspect_expanded_icon = self.config.get("lock_aspect_expanded_icon", True)
+
+        # Schriftgröße für Icon-Namen
+        self.collapsed_name_font_size = self.config.get("collapsed_name_font_size", 8)
+        self.expanded_name_font_size = self.config.get("expanded_name_font_size", 8)
 
         # Verknüpfungsnamen in der verkleinerten Ansicht ausblenden (Standard: an)
         self.hide_shortcut_names = self.config.get("hide_shortcut_names", True)
 
-        # Icon-Größe (Basis-Pixel, Standard 48 für collapsed, 36 für expanded)
-        self.collapsed_icon_size = self.config.get("collapsed_icon_size", 48)
-        self.expanded_icon_size = self.config.get("expanded_icon_size", 36)
-
-        # Basis-Größen (bei 100%)
-        self._base_tile_width = DESKTOP_GRID_X * 2   # 150
-        self._base_tile_height = DESKTOP_GRID_Y * 2   # 150
-        self._base_expanded_width = 245
-        self._base_expanded_height = 280
-
-        # Aktuelle Größen (skaliert)
+        # Aktuelle Größen berechnen
         self.apply_scale()
 
         self.create_window()
 
     def apply_scale(self):
-        """Berechnet die skalierten Größen basierend auf collapsed_scale / expanded_scale"""
-        sc = max(10, min(150, self.collapsed_scale)) / 100.0
-        se = max(10, min(150, self.expanded_scale)) / 100.0
-        self.tile_width = max(40, int(self._base_tile_width * sc))
-        self.tile_height = max(40, int(self._base_tile_height * sc))
-        self.expanded_width = max(80, int(self._base_expanded_width * se))
-        self.expanded_height = max(100, int(self._base_expanded_height * se))
+        """Berechnet die Kachel-Größen aus den Pixel-Konfigurationswerten"""
+        self.tile_width = max(40, min(1000, self.collapsed_tile_w))
+        self.tile_height = max(40, min(1000, self.collapsed_tile_h))
+        self.expanded_width = max(80, min(1500, self.expanded_tile_w))
+        self.expanded_height = max(100, min(1500, self.expanded_tile_h))
     
     def create_window(self):
         """Erstellt das Kachel-Fenster mit Glaseffekt und echt transparenten Ecken"""
@@ -1563,10 +1586,9 @@ class FolderTile:
                 rel_x = mx - frame_x
                 rel_y = my - frame_y
                 
-                _s = self.expanded_scale / 100.0
                 cols = 3
-                cell_width = max(30, int(70 * _s))
-                cell_height = max(30, int(65 * _s))
+                cell_width = max(30, self.expanded_icon_w + 22)
+                cell_height = max(30, self.expanded_icon_h + 28)
                 
                 col = max(0, min(int(rel_x // cell_width), cols - 1))
                 row = max(0, int(rel_y // cell_height))
@@ -1639,11 +1661,10 @@ class FolderTile:
         self.canvas.delete("all")
         self._collapsed_icon_images.clear()
 
-        s = self.collapsed_scale / 100.0
         shortcuts = self.config.get("shortcuts", [])
         width = self.tile_width
         height = self.tile_height
-        
+
         # --- 3D-Hintergrund zeichnen (mit Tag für Hover-Swap) ---
         try:
             bg_img = create_3d_tile_background(width, height, base_color=(13, 13, 26), corner_radius=14)
@@ -1652,18 +1673,18 @@ class FolderTile:
                 self.canvas.create_image(0, 0, anchor="nw", image=self._normal_bg_photo, tags="bg_layer")
         except Exception as e:
             pass
-        
+
         if not shortcuts:
             self.draw_empty_folder(width, height)
         else:
             self.draw_icon_grid(shortcuts[:4], width, height)
-        
-        # Ordnername unten mit Schatten (skalierte Schriftgröße)
+
+        # Ordnername unten mit Schatten
         name = self.config.get("name", "Ordner")
         if len(name) > 12:
             name = name[:11] + "…"
 
-        name_font_size = max(6, int(9 * s))
+        name_font_size = max(6, self.collapsed_name_font_size + 1)
         self.canvas.create_text(
             width // 2 + 1, height - 9,
             text=name, fill="#000000",
@@ -1710,9 +1731,10 @@ class FolderTile:
         shortcut_name_extra = 0 if self.hide_shortcut_names else 18
         available_height = height - folder_name_reserve - shortcut_name_extra
 
-        # Icon-Größe skaliert (konfigurierbare Basis, Standard 48)
-        s = self.collapsed_scale / 100.0
-        icon_size = max(16, int(self.collapsed_icon_size * s))
+        # Icon-Größe direkt aus Pixelwerten
+        icon_w = max(16, self.collapsed_icon_w)
+        icon_h = max(16, self.collapsed_icon_h)
+        icon_fetch_size = max(icon_w, icon_h)
         cell_width = width // 2
         cell_height = available_height // 2
 
@@ -1727,12 +1749,12 @@ class FolderTile:
             # Icon laden
             icon_img = None
             try:
-                pil_img = IconExtractor.get_icon(shortcut["path"], icon_size)
+                pil_img = IconExtractor.get_icon(shortcut["path"], icon_fetch_size)
                 if pil_img:
                     if hasattr(Image, 'Resampling'):
-                        pil_img = pil_img.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                        pil_img = pil_img.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
                     else:
-                        pil_img = pil_img.resize((icon_size, icon_size), Image.LANCZOS)
+                        pil_img = pil_img.resize((icon_w, icon_h), Image.LANCZOS)
                     icon_img = ImageTk.PhotoImage(pil_img)
                     self._collapsed_icon_images.append(icon_img)
             except:
@@ -1747,13 +1769,13 @@ class FolderTile:
                 color = colors.get(ext, '#0078D4')
 
                 self.canvas.create_rectangle(
-                    cx - icon_size//2, cy - icon_size//2,
-                    cx + icon_size//2, cy + icon_size//2,
+                    cx - icon_w//2, cy - icon_h//2,
+                    cx + icon_w//2, cy + icon_h//2,
                     fill=color, outline=""
                 )
 
                 letter = shortcut["name"][0].upper() if shortcut["name"] else "?"
-                letter_font_size = max(8, int(16 * s))
+                letter_font_size = max(8, min(icon_w, icon_h) // 3)
                 self.canvas.create_text(
                     cx, cy,
                     text=letter,
@@ -1767,12 +1789,11 @@ class FolderTile:
                 if len(name) > 8:
                     name = name[:7] + "…"
 
-                grid_name_font = max(6, int(8 * s))
                 self.canvas.create_text(
-                    cx, cy + icon_size//2,
+                    cx, cy + icon_h//2,
                     text=name,
                     fill="white",
-                    font=("Segoe UI", grid_name_font),
+                    font=("Segoe UI", max(6, self.collapsed_name_font_size)),
                     anchor="n"
                 )
     
@@ -1947,16 +1968,17 @@ class FolderTile:
         hover_bg = "#1e1e3a"
         active_bg = "#2a2a4a"
 
-        s = self.expanded_scale / 100.0
         cols = 3
-        icon_size = max(16, int(self.expanded_icon_size * s))
-        cell_width = max(30, int(70 * s))
-        cell_height = max(30, int(65 * s))
-        
+        icon_w = max(16, self.expanded_icon_w)
+        icon_h = max(16, self.expanded_icon_h)
+        icon_fetch_size = max(icon_w, icon_h)
+        cell_width = max(30, icon_w + 22)
+        cell_height = max(30, icon_h + 28)
+
         for i, shortcut in enumerate(shortcuts):
             row = i // cols
             col = i % cols
-            
+
             # Container wie auf dem Desktop - mit Hover-Rand
             icon_frame = tk.Frame(
                 self.icons_frame,
@@ -1969,49 +1991,49 @@ class FolderTile:
             )
             icon_frame.grid(row=row, column=col, padx=2, pady=2)
             icon_frame.grid_propagate(False)
-            
+
             # Icon zentriert oben
             icon_container = tk.Frame(icon_frame, bg=glass_bg)
             icon_container.pack(pady=(3, 1))
-            
+
             icon_label = None
             try:
-                pil_img = IconExtractor.get_icon(shortcut["path"], icon_size)
+                pil_img = IconExtractor.get_icon(shortcut["path"], icon_fetch_size)
                 if pil_img:
                     if hasattr(Image, 'Resampling'):
-                        pil_img = pil_img.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                        pil_img = pil_img.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
                     else:
-                        pil_img = pil_img.resize((icon_size, icon_size), Image.LANCZOS)
+                        pil_img = pil_img.resize((icon_w, icon_h), Image.LANCZOS)
                     icon_img = ImageTk.PhotoImage(pil_img)
                     self._expanded_icon_images.append(icon_img)
                     icon_label = tk.Label(icon_container, image=icon_img, bg=glass_bg)
             except Exception as e:
                 print(f"Icon-Fehler für {shortcut['name']}: {e}")
-            
+
             if icon_label:
                 icon_label.pack()
             else:
                 # Fallback: Canvas-Icon mit Buchstabe
                 canvas = tk.Canvas(
-                    icon_container, 
-                    width=icon_size, 
-                    height=icon_size, 
-                    bg=glass_bg, 
+                    icon_container,
+                    width=icon_w,
+                    height=icon_h,
+                    bg=glass_bg,
                     highlightthickness=0
                 )
                 canvas.pack()
-                
+
                 # Abgerundetes Rechteck
                 canvas.create_rectangle(
-                    2, 2, icon_size-2, icon_size-2,
+                    2, 2, icon_w-2, icon_h-2,
                     fill="#0078D4", outline="#0078D4"
                 )
-                
+
                 # Buchstabe
                 letter = shortcut["name"][0].upper() if shortcut["name"] else "?"
-                exp_letter_font = max(8, int(16 * s))
+                exp_letter_font = max(8, min(icon_w, icon_h) // 3)
                 canvas.create_text(
-                    icon_size//2, icon_size//2,
+                    icon_w//2, icon_h//2,
                     text=letter,
                     fill="white",
                     font=("Segoe UI", exp_letter_font, "bold")
@@ -2023,11 +2045,10 @@ class FolderTile:
             if len(name) > 10:
                 name = name[:9] + "…"
 
-            exp_name_font = max(6, int(8 * s))
             name_label = tk.Label(
                 icon_frame,
                 text=name,
-                font=("Segoe UI", exp_name_font),
+                font=("Segoe UI", max(6, self.expanded_name_font_size)),
                 bg=glass_bg,
                 fg="#d0d0e0",
                 anchor="center"
@@ -2600,180 +2621,303 @@ class FolderTile:
         self.draw_tile_icon()
 
     def show_size_dialog(self):
-        """Öffnet Slider-Dialog zur Größeneinstellung (verkleinert + expandiert getrennt)"""
+        """Öffnet Slider-Dialog zur Größeneinstellung mit Pixel-Werten, Seitenverhältnis und Schriftgröße"""
         dlg = tk.Toplevel(self.window)
         dlg.title("Kachelgröße")
         dlg.overrideredirect(True)
         dlg.attributes("-topmost", True)
         dlg.config(bg="#12122a")
 
-        # Zentriert neben der Kachel positionieren
-        dlg_w, dlg_h = 260, 380
-        wx = self.window.winfo_x() + self.window.winfo_width() + 8
-        wy = self.window.winfo_y()
-        dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
-
         style_fg = "#d0d0e0"
         style_bg = "#12122a"
         slider_trough = "#2a2a5a"
         slider_fg = "#6a6aff"
+        sep_color = "#3a3a5a"
 
-        # --- Titel ---
-        tk.Label(
-            dlg, text="Kachelgröße", font=("Segoe UI Semibold", 11),
-            bg=style_bg, fg=style_fg
-        ).pack(pady=(10, 4))
+        # --- Scrollbarer Inhalt ---
+        dlg_w = 280
+        outer = tk.Frame(dlg, bg=style_bg)
+        outer.pack(fill="both", expand=True)
 
-        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15)
+        dlg_canvas = tk.Canvas(outer, bg=style_bg, highlightthickness=0, width=dlg_w - 2)
+        dlg_scrollbar = tk.Scrollbar(outer, orient="vertical", command=dlg_canvas.yview)
+        content = tk.Frame(dlg_canvas, bg=style_bg)
+        content.bind("<Configure>", lambda e: dlg_canvas.configure(scrollregion=dlg_canvas.bbox("all")))
+        dlg_canvas.create_window((0, 0), window=content, anchor="nw", width=dlg_w - 16)
+        dlg_canvas.configure(yscrollcommand=dlg_scrollbar.set)
+        dlg_canvas.pack(side="left", fill="both", expand=True)
+        dlg_scrollbar.pack(side="right", fill="y")
+        dlg_canvas.bind("<MouseWheel>", lambda e: dlg_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-        # --- Slider: Verkleinert ---
-        frame_c = tk.Frame(dlg, bg=style_bg)
-        frame_c.pack(fill="x", padx=18, pady=(10, 2))
+        # Hilfsfunktion: Slider-Zeile erzeugen
+        def make_slider(parent, label_text, value, from_, to_):
+            frame = tk.Frame(parent, bg=style_bg)
+            frame.pack(fill="x", padx=14, pady=(2, 0))
+            lbl = tk.Label(frame, text=label_text, font=("Segoe UI", 8), bg=style_bg, fg=style_fg, anchor="w")
+            lbl.pack(fill="x")
+            var = tk.IntVar(value=value)
+            tk.Scale(
+                frame, from_=from_, to=to_, orient="horizontal",
+                variable=var, showvalue=False,
+                bg=style_bg, fg=style_fg, troughcolor=slider_trough,
+                highlightthickness=0, bd=0, sliderrelief="flat",
+                activebackground=slider_fg, length=200
+            ).pack(fill="x")
+            return var, lbl
 
-        collapsed_label = tk.Label(
-            frame_c, text=f"Verkleinert: {self.collapsed_scale}%",
-            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
-        )
-        collapsed_label.pack(fill="x")
+        # Hilfsfunktion: Seitenverhältnis-Checkbox
+        def make_lock_cb(parent, value):
+            var = tk.BooleanVar(value=value)
+            cb = tk.Checkbutton(
+                parent, text="Seitenverhältnis beibehalten", variable=var,
+                font=("Segoe UI", 8), bg=style_bg, fg="#8888aa",
+                activebackground=style_bg, activeforeground="#8888aa",
+                selectcolor="#2a2a5a", highlightthickness=0, bd=0
+            )
+            cb.pack(padx=14, pady=(0, 2), anchor="w")
+            return var
 
-        collapsed_var = tk.IntVar(value=self.collapsed_scale)
-        collapsed_slider = tk.Scale(
-            frame_c, from_=10, to=150, orient="horizontal",
-            variable=collapsed_var, showvalue=False,
-            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
-            highlightthickness=0, bd=0, sliderrelief="flat",
-            activebackground=slider_fg, length=220
-        )
-        collapsed_slider.pack(fill="x")
+        # ===== KACHELGRÖSSE =====
+        tk.Label(content, text="Kachelgröße", font=("Segoe UI Semibold", 10),
+                 bg=style_bg, fg=style_fg).pack(pady=(8, 2))
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12)
 
-        # --- Slider: Expandiert ---
-        frame_e = tk.Frame(dlg, bg=style_bg)
-        frame_e.pack(fill="x", padx=18, pady=(6, 2))
+        # -- Verkleinert --
+        tk.Label(content, text="Verkleinert", font=("Segoe UI Semibold", 9),
+                 bg=style_bg, fg="#8888cc").pack(pady=(6, 0), anchor="w", padx=14)
 
-        expanded_label = tk.Label(
-            frame_e, text=f"Expandiert: {self.expanded_scale}%",
-            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
-        )
-        expanded_label.pack(fill="x")
+        ct_w_var, ct_w_lbl = make_slider(content, f"Breite: {self.collapsed_tile_w}px", self.collapsed_tile_w, 40, 1000)
+        ct_h_var, ct_h_lbl = make_slider(content, f"Höhe: {self.collapsed_tile_h}px", self.collapsed_tile_h, 40, 1000)
+        ct_lock_var = make_lock_cb(content, self.lock_aspect_collapsed_tile)
 
-        expanded_var = tk.IntVar(value=self.expanded_scale)
-        expanded_slider = tk.Scale(
-            frame_e, from_=10, to=150, orient="horizontal",
-            variable=expanded_var, showvalue=False,
-            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
-            highlightthickness=0, bd=0, sliderrelief="flat",
-            activebackground=slider_fg, length=220
-        )
-        expanded_slider.pack(fill="x")
+        # -- Expandiert --
+        tk.Label(content, text="Expandiert", font=("Segoe UI Semibold", 9),
+                 bg=style_bg, fg="#8888cc").pack(pady=(6, 0), anchor="w", padx=14)
 
-        # --- Trennlinie: Icon-Größe ---
-        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15, pady=(8, 0))
+        et_w_var, et_w_lbl = make_slider(content, f"Breite: {self.expanded_tile_w}px", self.expanded_tile_w, 80, 1500)
+        et_h_var, et_h_lbl = make_slider(content, f"Höhe: {self.expanded_tile_h}px", self.expanded_tile_h, 100, 1500)
+        et_lock_var = make_lock_cb(content, self.lock_aspect_expanded_tile)
 
-        tk.Label(
-            dlg, text="Icon-Größe", font=("Segoe UI Semibold", 11),
-            bg=style_bg, fg=style_fg
-        ).pack(pady=(6, 4))
+        # ===== ICON-GRÖSSE =====
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12, pady=(6, 0))
+        tk.Label(content, text="Icon-Größe", font=("Segoe UI Semibold", 10),
+                 bg=style_bg, fg=style_fg).pack(pady=(6, 2))
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12)
 
-        # --- Slider: Icon-Größe Verkleinert ---
-        frame_ci = tk.Frame(dlg, bg=style_bg)
-        frame_ci.pack(fill="x", padx=18, pady=(2, 2))
+        # -- Verkleinert --
+        tk.Label(content, text="Verkleinert", font=("Segoe UI Semibold", 9),
+                 bg=style_bg, fg="#8888cc").pack(pady=(6, 0), anchor="w", padx=14)
 
-        ci_label = tk.Label(
-            frame_ci, text=f"Verkleinert: {self.collapsed_icon_size}px",
-            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
-        )
-        ci_label.pack(fill="x")
+        ci_w_var, ci_w_lbl = make_slider(content, f"Breite: {self.collapsed_icon_w}px", self.collapsed_icon_w, 16, 128)
+        ci_h_var, ci_h_lbl = make_slider(content, f"Höhe: {self.collapsed_icon_h}px", self.collapsed_icon_h, 16, 128)
+        ci_lock_var = make_lock_cb(content, self.lock_aspect_collapsed_icon)
 
-        ci_var = tk.IntVar(value=self.collapsed_icon_size)
-        tk.Scale(
-            frame_ci, from_=16, to=80, orient="horizontal",
-            variable=ci_var, showvalue=False,
-            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
-            highlightthickness=0, bd=0, sliderrelief="flat",
-            activebackground=slider_fg, length=220
-        ).pack(fill="x")
+        # -- Expandiert --
+        tk.Label(content, text="Expandiert", font=("Segoe UI Semibold", 9),
+                 bg=style_bg, fg="#8888cc").pack(pady=(6, 0), anchor="w", padx=14)
 
-        # --- Slider: Icon-Größe Expandiert ---
-        frame_ei = tk.Frame(dlg, bg=style_bg)
-        frame_ei.pack(fill="x", padx=18, pady=(2, 2))
+        ei_w_var, ei_w_lbl = make_slider(content, f"Breite: {self.expanded_icon_w}px", self.expanded_icon_w, 16, 128)
+        ei_h_var, ei_h_lbl = make_slider(content, f"Höhe: {self.expanded_icon_h}px", self.expanded_icon_h, 16, 128)
+        ei_lock_var = make_lock_cb(content, self.lock_aspect_expanded_icon)
 
-        ei_label = tk.Label(
-            frame_ei, text=f"Expandiert: {self.expanded_icon_size}px",
-            font=("Segoe UI", 9), bg=style_bg, fg=style_fg, anchor="w"
-        )
-        ei_label.pack(fill="x")
+        # ===== SCHRIFTGRÖSSE =====
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12, pady=(6, 0))
+        tk.Label(content, text="Schriftgröße", font=("Segoe UI Semibold", 10),
+                 bg=style_bg, fg=style_fg).pack(pady=(6, 2))
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12)
 
-        ei_var = tk.IntVar(value=self.expanded_icon_size)
-        tk.Scale(
-            frame_ei, from_=16, to=80, orient="horizontal",
-            variable=ei_var, showvalue=False,
-            bg=style_bg, fg=style_fg, troughcolor=slider_trough,
-            highlightthickness=0, bd=0, sliderrelief="flat",
-            activebackground=slider_fg, length=220
-        ).pack(fill="x")
+        fn_c_var, fn_c_lbl = make_slider(content, f"Verkleinert: {self.collapsed_name_font_size}pt", self.collapsed_name_font_size, 6, 24)
+        fn_e_var, fn_e_lbl = make_slider(content, f"Expandiert: {self.expanded_name_font_size}pt", self.expanded_name_font_size, 6, 24)
 
-        # --- Checkbox: Icon-Namen ausblenden ---
-        tk.Frame(dlg, bg="#3a3a5a", height=1).pack(fill="x", padx=15, pady=(8, 0))
+        # ===== OPTIONEN =====
+        tk.Frame(content, bg=sep_color, height=1).pack(fill="x", padx=12, pady=(6, 0))
 
         hide_names_var = tk.BooleanVar(value=self.hide_shortcut_names)
-        hide_names_cb = tk.Checkbutton(
-            dlg, text="Icon-Namen ausblenden",
-            variable=hide_names_var,
+        tk.Checkbutton(
+            content, text="Icon-Namen ausblenden", variable=hide_names_var,
             font=("Segoe UI", 9), bg=style_bg, fg=style_fg,
             activebackground=style_bg, activeforeground=style_fg,
             selectcolor="#2a2a5a", highlightthickness=0, bd=0
-        )
-        hide_names_cb.pack(padx=18, pady=(6, 2), anchor="w")
+        ).pack(padx=14, pady=(6, 8), anchor="w")
 
+        # --- Seitenverhältnis-Tracking: letzte Werte für Ratio-Berechnung ---
+        _last = {
+            'ct_w': self.collapsed_tile_w, 'ct_h': self.collapsed_tile_h,
+            'et_w': self.expanded_tile_w, 'et_h': self.expanded_tile_h,
+            'ci_w': self.collapsed_icon_w, 'ci_h': self.collapsed_icon_h,
+            'ei_w': self.expanded_icon_w, 'ei_h': self.expanded_icon_h,
+        }
+        _updating = {'active': False}
+
+        # --- Live-Update Callbacks ---
+        def _apply_pair(w_var, h_var, w_lbl, h_lbl, lock_var, last_w_key, last_h_key,
+                        w_attr, h_attr, w_cfg, h_cfg, w_min, w_max, h_min, h_max,
+                        unit, is_w_change, refresh_fn):
+            if _updating['active']:
+                return
+            _updating['active'] = True
+            try:
+                w = w_var.get()
+                h = h_var.get()
+                if lock_var.get():
+                    old_w = _last[last_w_key]
+                    old_h = _last[last_h_key]
+                    if old_w > 0 and old_h > 0:
+                        ratio = old_h / old_w
+                        if is_w_change:
+                            h = max(h_min, min(h_max, int(w * ratio)))
+                            h_var.set(h)
+                        else:
+                            w = max(w_min, min(w_max, int(h / ratio)))
+                            w_var.set(w)
+                w_lbl.config(text=f"Breite: {w}{unit}")
+                h_lbl.config(text=f"Höhe: {h}{unit}")
+                _last[last_w_key] = w
+                _last[last_h_key] = h
+                setattr(self, w_attr, w)
+                setattr(self, h_attr, h)
+                self.config[w_cfg] = w
+                self.config[h_cfg] = h
+                refresh_fn()
+            finally:
+                _updating['active'] = False
+
+        def refresh_collapsed():
+            self.apply_scale()
+            self._normal_bg_photo = None
+            self._hover_bg_photo = None
+            self.canvas.config(width=self.tile_width, height=self.tile_height)
+            self.draw_tile_icon()
+            if not self.is_expanded:
+                x = self.window.winfo_x()
+                y = self.window.winfo_y()
+                self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
+                self.apply_rounded_corners(self.tile_width, self.tile_height)
+                if self.hwnd:
+                    enable_acrylic_blur(self.hwnd, 0xB0201A0D)
+            self.manager.save_config()
+
+        def refresh_expanded():
+            self.apply_scale()
+            if self.is_expanded:
+                x = self.window.winfo_x()
+                y = self.window.winfo_y()
+                self.window.geometry(f"{self.expanded_width}x{self.expanded_height}+{x}+{y}")
+                self.apply_rounded_corners(self.expanded_width, self.expanded_height)
+                self.refresh_expanded_view()
+            self.manager.save_config()
+
+        def refresh_collapsed_icons():
+            self._normal_bg_photo = None
+            self._hover_bg_photo = None
+            self.draw_tile_icon()
+            self.manager.save_config()
+
+        def refresh_expanded_icons():
+            if self.is_expanded:
+                self.refresh_expanded_view()
+            self.manager.save_config()
+
+        # Kachelgröße: Verkleinert
+        ct_w_var.trace_add("write", lambda *_: _apply_pair(
+            ct_w_var, ct_h_var, ct_w_lbl, ct_h_lbl, ct_lock_var, 'ct_w', 'ct_h',
+            'collapsed_tile_w', 'collapsed_tile_h', 'collapsed_tile_w', 'collapsed_tile_h',
+            40, 1000, 40, 1000, 'px', True, refresh_collapsed))
+        ct_h_var.trace_add("write", lambda *_: _apply_pair(
+            ct_w_var, ct_h_var, ct_w_lbl, ct_h_lbl, ct_lock_var, 'ct_w', 'ct_h',
+            'collapsed_tile_w', 'collapsed_tile_h', 'collapsed_tile_w', 'collapsed_tile_h',
+            40, 1000, 40, 1000, 'px', False, refresh_collapsed))
+
+        # Kachelgröße: Expandiert
+        et_w_var.trace_add("write", lambda *_: _apply_pair(
+            et_w_var, et_h_var, et_w_lbl, et_h_lbl, et_lock_var, 'et_w', 'et_h',
+            'expanded_tile_w', 'expanded_tile_h', 'expanded_tile_w', 'expanded_tile_h',
+            80, 1500, 100, 1500, 'px', True, refresh_expanded))
+        et_h_var.trace_add("write", lambda *_: _apply_pair(
+            et_w_var, et_h_var, et_w_lbl, et_h_lbl, et_lock_var, 'et_w', 'et_h',
+            'expanded_tile_w', 'expanded_tile_h', 'expanded_tile_w', 'expanded_tile_h',
+            80, 1500, 100, 1500, 'px', False, refresh_expanded))
+
+        # Icon-Größe: Verkleinert
+        ci_w_var.trace_add("write", lambda *_: _apply_pair(
+            ci_w_var, ci_h_var, ci_w_lbl, ci_h_lbl, ci_lock_var, 'ci_w', 'ci_h',
+            'collapsed_icon_w', 'collapsed_icon_h', 'collapsed_icon_w', 'collapsed_icon_h',
+            16, 128, 16, 128, 'px', True, refresh_collapsed_icons))
+        ci_h_var.trace_add("write", lambda *_: _apply_pair(
+            ci_w_var, ci_h_var, ci_w_lbl, ci_h_lbl, ci_lock_var, 'ci_w', 'ci_h',
+            'collapsed_icon_w', 'collapsed_icon_h', 'collapsed_icon_w', 'collapsed_icon_h',
+            16, 128, 16, 128, 'px', False, refresh_collapsed_icons))
+
+        # Icon-Größe: Expandiert
+        ei_w_var.trace_add("write", lambda *_: _apply_pair(
+            ei_w_var, ei_h_var, ei_w_lbl, ei_h_lbl, ei_lock_var, 'ei_w', 'ei_h',
+            'expanded_icon_w', 'expanded_icon_h', 'expanded_icon_w', 'expanded_icon_h',
+            16, 128, 16, 128, 'px', True, refresh_expanded_icons))
+        ei_h_var.trace_add("write", lambda *_: _apply_pair(
+            ei_w_var, ei_h_var, ei_w_lbl, ei_h_lbl, ei_lock_var, 'ei_w', 'ei_h',
+            'expanded_icon_w', 'expanded_icon_h', 'expanded_icon_w', 'expanded_icon_h',
+            16, 128, 16, 128, 'px', False, refresh_expanded_icons))
+
+        # Schriftgröße
+        def on_fn_c_change(*_):
+            val = fn_c_var.get()
+            fn_c_lbl.config(text=f"Verkleinert: {val}pt")
+            self.collapsed_name_font_size = val
+            self.config["collapsed_name_font_size"] = val
+            self._normal_bg_photo = None
+            self._hover_bg_photo = None
+            self.draw_tile_icon()
+            self.manager.save_config()
+
+        def on_fn_e_change(*_):
+            val = fn_e_var.get()
+            fn_e_lbl.config(text=f"Expandiert: {val}pt")
+            self.expanded_name_font_size = val
+            self.config["expanded_name_font_size"] = val
+            if self.is_expanded:
+                self.refresh_expanded_view()
+            self.manager.save_config()
+
+        fn_c_var.trace_add("write", on_fn_c_change)
+        fn_e_var.trace_add("write", on_fn_e_change)
+
+        # Icon-Namen ausblenden
         def on_hide_names_change(*_):
             self.hide_shortcut_names = hide_names_var.get()
             self.config["hide_shortcut_names"] = self.hide_shortcut_names
-            self.manager.save_config()
             self._normal_bg_photo = None
             self._hover_bg_photo = None
             self.draw_tile_icon()
+            self.manager.save_config()
 
         hide_names_var.trace_add("write", on_hide_names_change)
 
-        # --- Live-Update bei Slider-Änderung ---
-        def on_collapsed_change(*_):
-            val = collapsed_var.get()
-            collapsed_label.config(text=f"Verkleinert: {val}%")
-            self._apply_collapsed_scale(val)
+        # Seitenverhältnis-Locks speichern
+        def save_lock(attr, cfg_key, var):
+            def _save(*_):
+                setattr(self, attr, var.get())
+                self.config[cfg_key] = var.get()
+                self.manager.save_config()
+            return _save
 
-        def on_expanded_change(*_):
-            val = expanded_var.get()
-            expanded_label.config(text=f"Expandiert: {val}%")
-            self._apply_expanded_scale(val)
+        ct_lock_var.trace_add("write", save_lock('lock_aspect_collapsed_tile', 'lock_aspect_collapsed_tile', ct_lock_var))
+        et_lock_var.trace_add("write", save_lock('lock_aspect_expanded_tile', 'lock_aspect_expanded_tile', et_lock_var))
+        ci_lock_var.trace_add("write", save_lock('lock_aspect_collapsed_icon', 'lock_aspect_collapsed_icon', ci_lock_var))
+        ei_lock_var.trace_add("write", save_lock('lock_aspect_expanded_icon', 'lock_aspect_expanded_icon', ei_lock_var))
 
-        def on_ci_change(*_):
-            val = ci_var.get()
-            ci_label.config(text=f"Verkleinert: {val}px")
-            self.collapsed_icon_size = val
-            self.config["collapsed_icon_size"] = val
-            self.manager.save_config()
-            self._normal_bg_photo = None
-            self._hover_bg_photo = None
-            self.draw_tile_icon()
-
-        def on_ei_change(*_):
-            val = ei_var.get()
-            ei_label.config(text=f"Expandiert: {val}px")
-            self.expanded_icon_size = val
-            self.config["expanded_icon_size"] = val
-            self.manager.save_config()
-            if self.is_expanded:
-                self.refresh_expanded_view()
-
-        collapsed_var.trace_add("write", on_collapsed_change)
-        expanded_var.trace_add("write", on_expanded_change)
-        ci_var.trace_add("write", on_ci_change)
-        ei_var.trace_add("write", on_ei_change)
+        # --- Dialog positionieren und anzeigen ---
+        dlg.update_idletasks()
+        content_h = content.winfo_reqheight()
+        dlg_h = min(content_h + 4, self.window.winfo_screenheight() - 80)
+        wx = self.window.winfo_x() + self.window.winfo_width() + 8
+        wy = self.window.winfo_y()
+        if wy + dlg_h > self.window.winfo_screenheight() - 40:
+            wy = max(0, self.window.winfo_screenheight() - dlg_h - 40)
+        dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
 
         # --- Schließen bei Klick außerhalb ---
         def on_focus_out(e):
             try:
-                # Prüfe ob der Fokus noch im Dialog ist
                 focused = dlg.focus_get()
                 if focused and str(focused).startswith(str(dlg)):
                     return
@@ -2784,50 +2928,6 @@ class FolderTile:
         dlg.bind("<FocusOut>", on_focus_out)
         dlg.bind("<Escape>", lambda e: dlg.destroy())
         dlg.focus_force()
-
-    def _apply_collapsed_scale(self, val):
-        """Wendet den Verkleinert-Zoom live an"""
-        val = max(10, min(150, val))
-        self.collapsed_scale = val
-        self.config["collapsed_scale"] = val
-        self.manager.save_config()
-
-        # Caches invalidieren
-        self._normal_bg_photo = None
-        self._hover_bg_photo = None
-
-        self.apply_scale()
-
-        # Canvas-Größe und Icon immer aktualisieren (auch wenn expandiert)
-        self.canvas.config(width=self.tile_width, height=self.tile_height)
-        self.draw_tile_icon()
-
-        if not self.is_expanded:
-            # Collapsed: sofort Fenster anpassen
-            x = self.window.winfo_x()
-            y = self.window.winfo_y()
-            self.window.geometry(f"{self.tile_width}x{self.tile_height}+{x}+{y}")
-            self.apply_rounded_corners(self.tile_width, self.tile_height)
-            if self.hwnd:
-                enable_acrylic_blur(self.hwnd, 0xB0201A0D)
-
-    def _apply_expanded_scale(self, val):
-        """Wendet den Expandiert-Zoom live an"""
-        val = max(10, min(150, val))
-        self.expanded_scale = val
-        self.config["expanded_scale"] = val
-        self.manager.save_config()
-
-        self.apply_scale()
-
-        if self.is_expanded:
-            # Expandiert: Fenster anpassen und Inhalt neu aufbauen
-            x = self.window.winfo_x()
-            y = self.window.winfo_y()
-            self.window.geometry(f"{self.expanded_width}x{self.expanded_height}+{x}+{y}")
-            self.apply_rounded_corners(self.expanded_width, self.expanded_height)
-            # Icon-Grid im expanded frame neu aufbauen
-            self.refresh_expanded_view()
     
     def restore_all_to_desktop(self):
         """Stellt alle Verknüpfungen auf Desktop wieder her"""
