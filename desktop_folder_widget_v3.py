@@ -1463,6 +1463,7 @@ class FolderTile:
         self._hover_expand_timer = None
         self._hover_collapse_timer = None
         self._mouse_inside = False
+        self._size_dialog_open = False
         
         self.window.bind("<Enter>", self._on_window_enter)
         self.window.bind("<Leave>", self._on_window_leave)
@@ -1470,18 +1471,22 @@ class FolderTile:
     def _on_window_enter(self, event):
         """Maus betritt das Fenster — Hover-Expand starten"""
         self._mouse_inside = True
-        
+
         # Collapse-Timer abbrechen falls aktiv
         if self._hover_collapse_timer:
             self.window.after_cancel(self._hover_collapse_timer)
             self._hover_collapse_timer = None
-        
+
         if self.is_expanded or self.animation_running:
             return
-        
+
+        # Nicht expandieren wenn Mausbutton gedrückt ist (Drag aus anderer App)
+        if event.state & 0x100:  # Button1 gedrückt
+            return
+
         # Visuellen Hover-Effekt sofort zeigen
         self._draw_hover_state(True)
-        
+
         # Expand nach kurzer Verzögerung (150ms — schnell)
         self._hover_expand_timer = self.window.after(150, self._hover_expand)
     
@@ -1522,7 +1527,7 @@ class FolderTile:
     def _hover_collapse(self):
         """Wird nach Leave-Verzögerung aufgerufen — klappt zusammen"""
         self._hover_collapse_timer = None
-        if self._mouse_inside or not self.is_expanded or self.animation_running:
+        if self._mouse_inside or not self.is_expanded or self.animation_running or self._size_dialog_open:
             return
         self.collapse()
     
@@ -1856,11 +1861,10 @@ class FolderTile:
             self.window.after_cancel(self._hover_collapse_timer)
             self._hover_collapse_timer = None
         
-        # Fenster nach vorne bringen
+        # Fenster nach vorne bringen (ohne focus_force um andere Apps nicht zu stören)
         self.window.attributes("-topmost", True)
         self.window.attributes("-alpha", 0.96)
         self.window.lift()
-        self.window.focus_force()
         
         # Fenster temporär aus Desktop lösen wenn eingebettet
         if self.is_embedded and self.hwnd:
@@ -1913,13 +1917,23 @@ class FolderTile:
         scrollbar = tk.Scrollbar(grid_container, orient="vertical", command=canvas.yview)
 
         self.icons_frame = tk.Frame(canvas, bg=glass_bg)
-        self.icons_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        def _update_scroll_region(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Scrollbar nur anzeigen wenn Inhalt größer als sichtbarer Bereich
+            canvas.update_idletasks()
+            bbox = canvas.bbox("all")
+            if bbox and bbox[3] > canvas.winfo_height():
+                scrollbar.pack(side="right", fill="y")
+            else:
+                scrollbar.pack_forget()
+
+        self.icons_frame.bind("<Configure>", _update_scroll_region)
 
         canvas.create_window((0, 0), window=self.icons_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
 
         canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
@@ -1979,15 +1993,14 @@ class FolderTile:
             row = i // cols
             col = i % cols
 
-            # Container wie auf dem Desktop - mit Hover-Rand
+            # Container wie auf dem Desktop - ohne highlightthickness um Layout-Shift zu vermeiden
             icon_frame = tk.Frame(
                 self.icons_frame,
                 bg=glass_bg,
                 width=cell_width,
                 height=cell_height,
-                highlightthickness=1,
-                highlightbackground=glass_bg,  # Unsichtbar im Normal-Zustand
-                highlightcolor=hover_bg,
+                highlightthickness=0,
+                bd=0,
             )
             icon_frame.grid(row=row, column=col, padx=2, pady=2)
             icon_frame.grid_propagate(False)
@@ -2067,16 +2080,16 @@ class FolderTile:
                 
                 def on_enter(e):
                     if not drag_data['active']:
-                        frame.config(bg="#1e1e3a", highlightbackground="#4a4a8a")
+                        frame.config(bg="#1e1e3a")
                         name_lbl.config(bg="#1e1e3a")
                         try:
                             icon_lbl.config(bg="#1e1e3a")
                         except:
                             pass
-                
+
                 def on_leave(e):
                     if not drag_data['active']:
-                        frame.config(bg="#0d0d1a", highlightbackground="#0d0d1a")
+                        frame.config(bg="#0d0d1a")
                         name_lbl.config(bg="#0d0d1a")
                         try:
                             icon_lbl.config(bg="#0d0d1a")
@@ -2622,6 +2635,7 @@ class FolderTile:
 
     def show_size_dialog(self):
         """Öffnet Slider-Dialog zur Größeneinstellung mit Pixel-Werten, Seitenverhältnis und Schriftgröße"""
+        self._size_dialog_open = True
         dlg = tk.Toplevel(self.window)
         dlg.title("Kachelgröße")
         dlg.overrideredirect(True)
@@ -2916,6 +2930,10 @@ class FolderTile:
         dlg.geometry(f"{dlg_w}x{dlg_h}+{wx}+{wy}")
 
         # --- Schließen bei Klick außerhalb ---
+        def close_dialog():
+            self._size_dialog_open = False
+            dlg.destroy()
+
         def on_focus_out(e):
             try:
                 focused = dlg.focus_get()
@@ -2923,10 +2941,11 @@ class FolderTile:
                     return
             except:
                 pass
-            dlg.destroy()
+            close_dialog()
 
         dlg.bind("<FocusOut>", on_focus_out)
-        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.bind("<Escape>", lambda e: close_dialog())
+        dlg.protocol("WM_DELETE_WINDOW", close_dialog)
         dlg.focus_force()
     
     def restore_all_to_desktop(self):
