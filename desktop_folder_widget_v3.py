@@ -1704,9 +1704,11 @@ class FolderTile:
     
     def draw_icon_grid(self, shortcuts, width, height):
         """Zeichnet 2x2 Icon-Grid wie Desktop-Icons"""
-        # Verfügbarer Platz — Name-Bereich unten nur abziehen wenn sichtbar
-        name_reserve = 0 if self.hide_shortcut_names else 25
-        available_height = height - name_reserve
+        # Verfügbarer Platz — immer Platz für Ordnername unten reservieren,
+        # plus zusätzlichen Platz wenn Shortcut-Namen sichtbar sind
+        folder_name_reserve = 22
+        shortcut_name_extra = 0 if self.hide_shortcut_names else 18
+        available_height = height - folder_name_reserve - shortcut_name_extra
 
         # Icon-Größe skaliert (konfigurierbare Basis, Standard 48)
         s = self.collapsed_scale / 100.0
@@ -1870,7 +1872,19 @@ class FolderTile:
             blur_color = 0xC0281E10
             enable_acrylic_blur(self.hwnd, blur_color)
 
-        # === Icon-Grid Container (kein Header — homogen mit collapsed) ===
+        # === Titel unten zuerst packen (side=bottom), damit er nicht abgeschnitten wird ===
+        display_name = self._truncated_name(self.expanded_width)
+        self._footer_label = tk.Label(
+            self.expanded_frame, text=display_name,
+            font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
+            anchor="center", cursor="hand2"
+        )
+        self._footer_label.pack(side="bottom", fill="x", pady=(3, 8))
+
+        # Trennlinie über dem Titel
+        tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(side="bottom", fill="x", padx=10, pady=(2, 0))
+
+        # === Icon-Grid Container füllt den restlichen Platz ===
         grid_container = tk.Frame(self.expanded_frame, bg=glass_bg)
         grid_container.pack(fill="both", expand=True, padx=5, pady=(8, 0))
 
@@ -1904,17 +1918,6 @@ class FolderTile:
             empty.bind("<ButtonRelease-1>", self._stop_bg_drag)
         else:
             self.create_desktop_icon_grid(shortcuts)
-
-        # === Trennlinie + Titel unten (konsistent mit collapsed) ===
-        tk.Frame(self.expanded_frame, bg="#3a3a5a", height=1).pack(fill="x", padx=10, pady=(2, 0))
-
-        display_name = self._truncated_name(self.expanded_width)
-        self._footer_label = tk.Label(
-            self.expanded_frame, text=display_name,
-            font=("Segoe UI Semibold", 9), bg=glass_bg, fg="#e0e0e0",
-            anchor="center", cursor="hand2"
-        )
-        self._footer_label.pack(fill="x", pady=(3, 8))
         self._footer_label.bind("<Button-1>", lambda e: self._start_name_edit())
 
         # Drag per Klicken-und-Halten auf freie Flächen
