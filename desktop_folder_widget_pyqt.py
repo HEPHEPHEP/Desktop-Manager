@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QFrame, QVBoxLayout, QHBoxLayout,
     QGridLayout, QScrollArea, QMenu, QInputDialog, QMessageBox,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QPushButton,
-    QFileIconProvider, QSpinBox, QDialog, QDialogButtonBox, QGroupBox
+    QFileIconProvider, QSpinBox, QDialog, QDialogButtonBox, QGroupBox,
+    QSlider
 )
 from PyQt6.QtCore import (
     Qt, QPoint, QSize, QPropertyAnimation, QEasingCurve, QTimer,
@@ -710,7 +711,7 @@ class IconWidget(QWidget):
 # ============================================================================
 
 class TileSettingsDialog(QDialog):
-    """Einstellungs-Dialog für eine Kachel"""
+    """Einstellungs-Dialog mit Slidern und Live-Vorschau"""
 
     STYLE = """
         QDialog {
@@ -731,16 +732,33 @@ class TileSettingsDialog(QDialog):
             left: 10px;
             padding: 0 4px;
         }
-        QSpinBox {
-            background: rgba(255, 255, 255, 15);
-            border: 1px solid rgba(255, 255, 255, 30);
-            border-radius: 4px;
-            padding: 4px;
-            color: #e0e0e0;
-            min-width: 70px;
+        QSlider::groove:horizontal {
+            height: 6px;
+            background: rgba(255, 255, 255, 20);
+            border-radius: 3px;
+        }
+        QSlider::handle:horizontal {
+            background: #0078d4;
+            width: 16px;
+            height: 16px;
+            margin: -5px 0;
+            border-radius: 8px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: #1a8ae8;
+        }
+        QSlider::sub-page:horizontal {
+            background: rgba(0, 120, 212, 120);
+            border-radius: 3px;
         }
         QLabel {
             color: #c0c0c0;
+        }
+        QLabel[class="value"] {
+            color: #ffffff;
+            font-family: 'Segoe UI';
+            font-weight: bold;
+            min-width: 45px;
         }
         QPushButton {
             background: rgba(255, 255, 255, 15);
@@ -758,139 +776,198 @@ class TileSettingsDialog(QDialog):
         }
     """
 
-    def __init__(self, config, parent=None):
+    def __init__(self, tile, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Kachel-Einstellungen")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(460)
         self.setStyleSheet(self.STYLE)
-        self._config = config
+        self._tile = tile
+        self._config = tile.config
+        self._original = self._snapshot()
         self._setup_ui()
 
-    def _create_size_row(self, label_w, val_w, label_h, val_h, min_v, max_v):
-        """Erstellt eine Zeile mit zwei Spinboxen und Link-Toggle"""
+    def _snapshot(self):
+        """Speichert den aktuellen Zustand für Restore bei Cancel"""
+        keys = [
+            "collapsed_tile_w", "collapsed_tile_h",
+            "expanded_tile_w", "expanded_tile_h",
+            "collapsed_icon_w", "collapsed_icon_h",
+            "expanded_icon_w", "expanded_icon_h",
+            "collapsed_spacing_h", "collapsed_spacing_v",
+            "expanded_spacing_h", "expanded_spacing_v",
+        ]
+        return {k: self._config.get(k, self._defaults()[k]) for k in keys}
+
+    @staticmethod
+    def _defaults():
+        return {
+            "collapsed_tile_w": 120, "collapsed_tile_h": 120,
+            "expanded_tile_w": 260, "expanded_tile_h": 320,
+            "collapsed_icon_w": 40, "collapsed_icon_h": 40,
+            "expanded_icon_w": 36, "expanded_icon_h": 36,
+            "collapsed_spacing_h": 4, "collapsed_spacing_v": 4,
+            "expanded_spacing_h": 8, "expanded_spacing_v": 8,
+        }
+
+    def _create_slider_row(self, label, value, min_v, max_v):
+        """Erstellt Label + Slider + Wert-Anzeige"""
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        spin_w = QSpinBox()
-        spin_w.setRange(min_v, max_v)
-        spin_w.setValue(val_w)
-        spin_w.setSuffix(" px")
+        lbl = QLabel(label)
+        lbl.setFixedWidth(50)
 
-        link_btn = QPushButton("🔗")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(min_v, max_v)
+        slider.setValue(value)
+
+        val_label = QLabel(f"{value} px")
+        val_label.setProperty("class", "value")
+        val_label.setFixedWidth(50)
+
+        slider.valueChanged.connect(lambda v: val_label.setText(f"{v} px"))
+
+        layout.addWidget(lbl)
+        layout.addWidget(slider, stretch=1)
+        layout.addWidget(val_label)
+
+        return row, slider, val_label
+
+    def _create_linked_slider_pair(self, label_w, val_w, label_h, val_h, min_v, max_v):
+        """Erstellt zwei Slider-Zeilen mit Link-Toggle"""
+        container = QWidget()
+        vlayout = QVBoxLayout(container)
+        vlayout.setContentsMargins(0, 0, 0, 0)
+        vlayout.setSpacing(4)
+
+        row_w, slider_w, _ = self._create_slider_row(label_w, val_w, min_v, max_v)
+
+        # Link-Toggle zwischen den Zeilen
+        link_row = QWidget()
+        link_layout = QHBoxLayout(link_row)
+        link_layout.setContentsMargins(50, 0, 50, 0)
+        link_btn = QPushButton("🔗 verknüpft")
         link_btn.setCheckable(True)
         link_btn.setChecked(val_w == val_h)
-        link_btn.setFixedSize(28, 28)
-        link_btn.setToolTip("Breite und Höhe verknüpfen")
+        link_btn.setFixedHeight(22)
+        link_btn.clicked.connect(lambda checked: link_btn.setText(
+            "🔗 verknüpft" if checked else "🔓 getrennt"))
+        if val_w != val_h:
+            link_btn.setText("🔓 getrennt")
+        link_layout.addWidget(link_btn)
 
-        spin_h = QSpinBox()
-        spin_h.setRange(min_v, max_v)
-        spin_h.setValue(val_h)
-        spin_h.setSuffix(" px")
+        row_h, slider_h, _ = self._create_slider_row(label_h, val_h, min_v, max_v)
 
-        def on_w_changed(v):
+        def on_w(v):
             if link_btn.isChecked():
-                spin_h.blockSignals(True)
-                spin_h.setValue(v)
-                spin_h.blockSignals(False)
+                slider_h.blockSignals(True)
+                slider_h.setValue(v)
+                slider_h.blockSignals(False)
+            self._apply_live()
 
-        def on_h_changed(v):
+        def on_h(v):
             if link_btn.isChecked():
-                spin_w.blockSignals(True)
-                spin_w.setValue(v)
-                spin_w.blockSignals(False)
+                slider_w.blockSignals(True)
+                slider_w.setValue(v)
+                slider_w.blockSignals(False)
+            self._apply_live()
 
-        spin_w.valueChanged.connect(on_w_changed)
-        spin_h.valueChanged.connect(on_h_changed)
+        slider_w.valueChanged.connect(on_w)
+        slider_h.valueChanged.connect(on_h)
 
-        layout.addWidget(QLabel(label_w))
-        layout.addWidget(spin_w)
-        layout.addWidget(link_btn)
-        layout.addWidget(QLabel(label_h))
-        layout.addWidget(spin_h)
+        vlayout.addWidget(row_w)
+        vlayout.addWidget(link_row)
+        vlayout.addWidget(row_h)
 
-        return row, spin_w, spin_h
+        return container, slider_w, slider_h
 
-    def _create_spacing_row(self, val_h, val_v, min_v, max_v):
-        """Erstellt eine Zeile für Abstände"""
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
+    def _create_spacing_sliders(self, val_h, val_v, min_v, max_v):
+        """Erstellt Slider-Paar für Abstände"""
+        container = QWidget()
+        vlayout = QVBoxLayout(container)
+        vlayout.setContentsMargins(0, 0, 0, 0)
+        vlayout.setSpacing(4)
 
-        spin_h = QSpinBox()
-        spin_h.setRange(min_v, max_v)
-        spin_h.setValue(val_h)
-        spin_h.setSuffix(" px")
+        row_h, slider_h, _ = self._create_slider_row("H:", val_h, min_v, max_v)
+        row_v, slider_v, _ = self._create_slider_row("V:", val_v, min_v, max_v)
 
-        spin_v = QSpinBox()
-        spin_v.setRange(min_v, max_v)
-        spin_v.setValue(val_v)
-        spin_v.setSuffix(" px")
+        slider_h.valueChanged.connect(lambda: self._apply_live())
+        slider_v.valueChanged.connect(lambda: self._apply_live())
 
-        layout.addWidget(QLabel("Horizontal:"))
-        layout.addWidget(spin_h)
-        layout.addWidget(QLabel("Vertikal:"))
-        layout.addWidget(spin_v)
+        vlayout.addWidget(row_h)
+        vlayout.addWidget(row_v)
 
-        return row, spin_h, spin_v
+        return container, slider_h, slider_v
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         c = self._config
+        d = self._defaults()
+
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        content = QWidget()
+        clayout = QVBoxLayout(content)
 
         # Kleine Kachel
         g1 = QGroupBox("Kleine Kachel (eingeklappt)")
         g1l = QVBoxLayout(g1)
-        r1, self.coll_tile_w, self.coll_tile_h = self._create_size_row(
-            "Breite:", c.get("collapsed_tile_w", 120),
-            "Höhe:", c.get("collapsed_tile_h", 120), 60, 400)
+        r1, self.coll_tile_w, self.coll_tile_h = self._create_linked_slider_pair(
+            "Breite:", c.get("collapsed_tile_w", d["collapsed_tile_w"]),
+            "Höhe:", c.get("collapsed_tile_h", d["collapsed_tile_h"]), 60, 400)
         g1l.addWidget(r1)
-        layout.addWidget(g1)
+        clayout.addWidget(g1)
 
         # Große Kachel
         g2 = QGroupBox("Große Kachel (ausgeklappt)")
         g2l = QVBoxLayout(g2)
-        r2, self.exp_tile_w, self.exp_tile_h = self._create_size_row(
-            "Breite:", c.get("expanded_tile_w", 260),
-            "Höhe:", c.get("expanded_tile_h", 320), 120, 800)
+        r2, self.exp_tile_w, self.exp_tile_h = self._create_linked_slider_pair(
+            "Breite:", c.get("expanded_tile_w", d["expanded_tile_w"]),
+            "Höhe:", c.get("expanded_tile_h", d["expanded_tile_h"]), 120, 800)
         g2l.addWidget(r2)
-        layout.addWidget(g2)
+        clayout.addWidget(g2)
 
         # Icon-Größe (eingeklappt)
         g3 = QGroupBox("Icon-Größe (eingeklappt)")
         g3l = QVBoxLayout(g3)
-        r3, self.coll_icon_w, self.coll_icon_h = self._create_size_row(
-            "Breite:", c.get("collapsed_icon_w", 40),
-            "Höhe:", c.get("collapsed_icon_h", 40), 16, 128)
+        r3, self.coll_icon_w, self.coll_icon_h = self._create_linked_slider_pair(
+            "Breite:", c.get("collapsed_icon_w", d["collapsed_icon_w"]),
+            "Höhe:", c.get("collapsed_icon_h", d["collapsed_icon_h"]), 16, 128)
         g3l.addWidget(r3)
-        layout.addWidget(g3)
+        clayout.addWidget(g3)
 
         # Icon-Größe (ausgeklappt)
         g4 = QGroupBox("Icon-Größe (ausgeklappt)")
         g4l = QVBoxLayout(g4)
-        r4, self.exp_icon_w, self.exp_icon_h = self._create_size_row(
-            "Breite:", c.get("expanded_icon_w", 36),
-            "Höhe:", c.get("expanded_icon_h", 36), 16, 128)
+        r4, self.exp_icon_w, self.exp_icon_h = self._create_linked_slider_pair(
+            "Breite:", c.get("expanded_icon_w", d["expanded_icon_w"]),
+            "Höhe:", c.get("expanded_icon_h", d["expanded_icon_h"]), 16, 128)
         g4l.addWidget(r4)
-        layout.addWidget(g4)
+        clayout.addWidget(g4)
 
         # Abstände (eingeklappt)
         g5 = QGroupBox("Abstände (eingeklappt)")
         g5l = QVBoxLayout(g5)
-        r5, self.coll_spacing_h, self.coll_spacing_v = self._create_spacing_row(
-            c.get("collapsed_spacing_h", 4),
-            c.get("collapsed_spacing_v", 4), 0, 40)
+        r5, self.coll_spacing_h, self.coll_spacing_v = self._create_spacing_sliders(
+            c.get("collapsed_spacing_h", d["collapsed_spacing_h"]),
+            c.get("collapsed_spacing_v", d["collapsed_spacing_v"]), 0, 40)
         g5l.addWidget(r5)
-        layout.addWidget(g5)
+        clayout.addWidget(g5)
 
         # Abstände (ausgeklappt)
         g6 = QGroupBox("Abstände (ausgeklappt)")
         g6l = QVBoxLayout(g6)
-        r6, self.exp_spacing_h, self.exp_spacing_v = self._create_spacing_row(
-            c.get("expanded_spacing_h", 8),
-            c.get("expanded_spacing_v", 8), 0, 40)
+        r6, self.exp_spacing_h, self.exp_spacing_v = self._create_spacing_sliders(
+            c.get("expanded_spacing_h", d["expanded_spacing_h"]),
+            c.get("expanded_spacing_v", d["expanded_spacing_v"]), 0, 40)
         g6l.addWidget(r6)
-        layout.addWidget(g6)
+        clayout.addWidget(g6)
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll, stretch=1)
 
         # Buttons
         buttons = QDialogButtonBox(
@@ -898,6 +975,34 @@ class TileSettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _apply_live(self):
+        """Wendet die aktuellen Slider-Werte sofort auf die Kachel an"""
+        tile = self._tile
+        tile.collapsed_width = self.coll_tile_w.value()
+        tile.collapsed_height = self.coll_tile_h.value()
+        tile.expanded_width = self.exp_tile_w.value()
+        tile.expanded_height = self.exp_tile_h.value()
+        tile.icon_w_collapsed = self.coll_icon_w.value()
+        tile.icon_h_collapsed = self.coll_icon_h.value()
+        tile.icon_w_expanded = self.exp_icon_w.value()
+        tile.icon_h_expanded = self.exp_icon_h.value()
+        tile.spacing_h_collapsed = self.coll_spacing_h.value()
+        tile.spacing_v_collapsed = self.coll_spacing_v.value()
+        tile.spacing_h_expanded = self.exp_spacing_h.value()
+        tile.spacing_v_expanded = self.exp_spacing_v.value()
+        # Spacings sofort anwenden
+        tile.collapsed_grid_layout.setHorizontalSpacing(tile.spacing_h_collapsed)
+        tile.collapsed_grid_layout.setVerticalSpacing(tile.spacing_v_collapsed)
+        tile.icons_layout.setHorizontalSpacing(tile.spacing_h_expanded)
+        tile.icons_layout.setVerticalSpacing(tile.spacing_v_expanded)
+        # Kachel-Größe und Icons aktualisieren
+        if tile.is_expanded:
+            tile.resize(tile.expanded_width, tile.expanded_height)
+            tile._update_expanded_icons()
+        else:
+            tile.resize(tile.collapsed_width, tile.collapsed_height)
+            tile._update_collapsed_icons()
 
     def get_values(self):
         """Gibt alle Einstellungen als Dict zurück"""
@@ -915,6 +1020,10 @@ class TileSettingsDialog(QDialog):
             "expanded_spacing_h": self.exp_spacing_h.value(),
             "expanded_spacing_v": self.exp_spacing_v.value(),
         }
+
+    def get_original(self):
+        """Gibt die Original-Werte vor dem Dialog zurück"""
+        return self._original
 
 
 # ============================================================================
@@ -1345,38 +1454,38 @@ class FolderTile(FrostedGlassWidget):
             self.manager.quit()
     
     def _show_settings(self):
-        """Öffnet den Einstellungs-Dialog für diese Kachel"""
-        dlg = TileSettingsDialog(self.config, self)
+        """Öffnet den Einstellungs-Dialog mit Live-Vorschau"""
+        dlg = TileSettingsDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            values = dlg.get_values()
-            # Config aktualisieren
-            self.config.update(values)
-            # Interne Werte aktualisieren
-            self.collapsed_width = values["collapsed_tile_w"]
-            self.collapsed_height = values["collapsed_tile_h"]
-            self.expanded_width = values["expanded_tile_w"]
-            self.expanded_height = values["expanded_tile_h"]
-            self.icon_w_collapsed = values["collapsed_icon_w"]
-            self.icon_h_collapsed = values["collapsed_icon_h"]
-            self.icon_w_expanded = values["expanded_icon_w"]
-            self.icon_h_expanded = values["expanded_icon_h"]
-            self.spacing_h_collapsed = values["collapsed_spacing_h"]
-            self.spacing_v_collapsed = values["collapsed_spacing_v"]
-            self.spacing_h_expanded = values["expanded_spacing_h"]
-            self.spacing_v_expanded = values["expanded_spacing_v"]
-            # Spacings anwenden
+            # Werte übernehmen und speichern
+            self.config.update(dlg.get_values())
+            self.manager.save_config()
+        else:
+            # Bei Cancel: Originalwerte wiederherstellen
+            original = dlg.get_original()
+            self.config.update(original)
+            self.collapsed_width = original["collapsed_tile_w"]
+            self.collapsed_height = original["collapsed_tile_h"]
+            self.expanded_width = original["expanded_tile_w"]
+            self.expanded_height = original["expanded_tile_h"]
+            self.icon_w_collapsed = original["collapsed_icon_w"]
+            self.icon_h_collapsed = original["collapsed_icon_h"]
+            self.icon_w_expanded = original["expanded_icon_w"]
+            self.icon_h_expanded = original["expanded_icon_h"]
+            self.spacing_h_collapsed = original["collapsed_spacing_h"]
+            self.spacing_v_collapsed = original["collapsed_spacing_v"]
+            self.spacing_h_expanded = original["expanded_spacing_h"]
+            self.spacing_v_expanded = original["expanded_spacing_v"]
             self.collapsed_grid_layout.setHorizontalSpacing(self.spacing_h_collapsed)
             self.collapsed_grid_layout.setVerticalSpacing(self.spacing_v_collapsed)
             self.icons_layout.setHorizontalSpacing(self.spacing_h_expanded)
             self.icons_layout.setVerticalSpacing(self.spacing_v_expanded)
-            # Ansicht aktualisieren
             if self.is_expanded:
                 self.resize(self.expanded_width, self.expanded_height)
                 self._update_expanded_icons()
             else:
                 self.resize(self.collapsed_width, self.collapsed_height)
                 self._update_collapsed_icons()
-            self.manager.save_config()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
