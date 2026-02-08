@@ -16,7 +16,6 @@ import sys
 import os
 import json
 import subprocess
-import random
 from pathlib import Path
 import ctypes
 from ctypes import wintypes
@@ -525,50 +524,23 @@ def pil_to_qpixmap(pil_image):
 class FrostedGlassWidget(QWidget):
     """Basis-Widget mit Frosted Glass Effekt"""
 
-    # Gemeinsame Noise-Textur (wird einmal generiert und wiederverwendet)
-    _shared_noise = None
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.Tool |
             Qt.WindowType.WindowStaysOnTopHint
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._blur_enabled = False
-        self._corner_radius = 16
-        self._background_color = QColor(255, 255, 255, 18)
-        self._border_color = QColor(255, 255, 255, 50)
+        self._corner_radius = 20
 
-        # Noise-Textur generieren (einmalig pro Klasse)
-        if FrostedGlassWidget._shared_noise is None:
-            FrostedGlassWidget._shared_noise = self._generate_noise_texture(512, 512)
-
-    @staticmethod
-    def _generate_noise_texture(width, height):
-        """Generiert eine subtile Noise-Textur für den Frosted-Glass-Effekt"""
-        noise_img = QImage(width, height, QImage.Format.Format_ARGB32)
-        noise_img.fill(QColor(0, 0, 0, 0))
-
-        rng = random.Random(42)  # Deterministisch für Konsistenz
-        for y in range(height):
-            for x in range(width):
-                if rng.random() < 0.4:
-                    alpha = rng.randint(3, 12)
-                    if rng.random() < 0.5:
-                        noise_img.setPixelColor(x, y, QColor(255, 255, 255, alpha))
-                    else:
-                        noise_img.setPixelColor(x, y, QColor(0, 0, 0, alpha))
-
-        return QPixmap.fromImage(noise_img)
-    
     def showEvent(self, event):
         """Aktiviert Blur-Effekt wenn Fenster angezeigt wird"""
         super().showEvent(event)
         self._enable_blur()
-    
+
     def _enable_blur(self):
         """Aktiviert den Windows Blur-Effekt (BlurWindow → DWM Fallback)"""
         if self._blur_enabled:
@@ -579,7 +551,7 @@ class FrostedGlassWidget(QWidget):
         # 1) BlurWindow-Bibliothek (bevorzugt)
         if HAS_BLURWINDOW:
             try:
-                GlobalBlur(hwnd, hexColor='#19191a40', Acrylic=True, Dark=True, QWidget=self)
+                GlobalBlur(hwnd, Acrylic=True, Dark=True, QWidget=self)
                 print("✓ BlurWindow Acrylic aktiviert")
                 self._blur_enabled = True
                 return
@@ -593,7 +565,7 @@ class FrostedGlassWidget(QWidget):
             return
 
         # 3) Fallback: Acrylic Blur (manuelle DWM API)
-        gradient_color = 0x40FFFFFF
+        gradient_color = 0x01000000
         if enable_acrylic_blur(hwnd, gradient_color):
             print("✓ Acrylic Blur aktiviert")
             self._blur_enabled = True
@@ -606,55 +578,18 @@ class FrostedGlassWidget(QWidget):
             return
 
         print("⚠ Kein Blur-Effekt verfügbar")
-    
+
     def paintEvent(self, event):
-        """Zeichnet nur die Glas-Overlays -- der Hintergrund bleibt transparent
-        damit der Blur-Effekt (BlurWindow / Acrylic) durchscheint."""
+        """Zeichnet die halbtransparente Glaskachel"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        r = self._corner_radius
 
-        # Abgerundeter Clip-Pfad
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, r, r)
-        painter.setClipPath(path)
-
-        # 1) Sehr leichter Tint, damit die Kachel sich vom Blur abhebt
-        painter.fillPath(path, QBrush(self._background_color))
-
-        # 2) Subtiler Glas-Gradient (Highlight oben)
-        glass_grad = QLinearGradient(0, 0, 0, h)
-        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
-        glass_grad.setColorAt(0.25, QColor(255, 255, 255, 10))
-        glass_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.fillPath(path, QBrush(glass_grad))
-
-        # 3) Noise-Textur für Frosted-Effekt
-        if FrostedGlassWidget._shared_noise is not None:
-            painter.setOpacity(0.35)
-            noise = FrostedGlassWidget._shared_noise
-            for ny in range(0, h, noise.height()):
-                for nx in range(0, w, noise.width()):
-                    painter.drawPixmap(nx, ny, noise)
-            painter.setOpacity(1.0)
-
-        # Clipping aufheben für Ränder
-        painter.setClipPath(path, Qt.ClipOperation.NoClip)
-
-        # 4) Innerer Leuchtrand (heller oben, dunkler unten)
-        inner_border_grad = QLinearGradient(0, 0, 0, h)
-        inner_border_grad.setColorAt(0.0, QColor(255, 255, 255, 60))
-        inner_border_grad.setColorAt(0.5, QColor(255, 255, 255, 15))
-        inner_border_grad.setColorAt(1.0, QColor(255, 255, 255, 8))
-        painter.setPen(QPen(QBrush(inner_border_grad), 1.0))
-        inner_rect = QPainterPath()
-        inner_rect.addRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
-        painter.drawPath(inner_rect)
-
-        # 5) Äußerer Rand
-        painter.setPen(QPen(self._border_color, 1.0))
-        painter.drawPath(path)
+        # Halbtransparenter weißer Hintergrund
+        painter.setBrush(QBrush(QColor(255, 255, 255, 40)))
+        # Leichter weißer Rand als Lichtkante
+        painter.setPen(QPen(QColor(255, 255, 255, 80), 1))
+        # Abgerundetes Rechteck
+        painter.drawRoundedRect(self.rect(), self._corner_radius, self._corner_radius)
 
 
 # ============================================================================
