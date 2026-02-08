@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QFrame, QVBoxLayout, QHBoxLayout,
     QGridLayout, QScrollArea, QMenu, QInputDialog, QMessageBox,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QPushButton,
-    QFileIconProvider
+    QFileIconProvider, QSpinBox, QDialog, QDialogButtonBox, QGroupBox
 )
 from PyQt6.QtCore import (
     Qt, QPoint, QSize, QPropertyAnimation, QEasingCurve, QTimer,
@@ -622,25 +622,26 @@ class IconWidget(QWidget):
     rightClicked = pyqtSignal(QPoint)
     dragStarted = pyqtSignal(int)
     
-    def __init__(self, shortcut, index, icon_size=36, parent=None):
+    def __init__(self, shortcut, index, icon_w=36, icon_h=36, parent=None):
         super().__init__(parent)
         self.shortcut = shortcut
         self.index = index
-        self.icon_size = icon_size
+        self.icon_w = icon_w
+        self.icon_h = icon_h
         self._is_hovered = False
         self._is_pressed = False
         self._drag_start_pos = None
-        
-        self.setFixedSize(icon_size + 24, icon_size + 32)
+
+        self.setFixedSize(icon_w + 24, icon_h + 32)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAcceptDrops(True)
-        
+
         # Icon laden
         self._pixmap = self._load_icon()
-    
+
     def _load_icon(self):
         """Lädt das Icon für den Shortcut"""
-        return IconExtractor.get_icon(self.shortcut["path"], self.icon_size)
+        return IconExtractor.get_icon(self.shortcut["path"], max(self.icon_w, self.icon_h))
     
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -653,21 +654,21 @@ class IconWidget(QWidget):
             painter.fillRect(self.rect(), QColor(255, 255, 255, 35))
         
         # Icon zentriert
-        icon_x = (self.width() - self.icon_size) // 2
+        icon_x = (self.width() - self.icon_w) // 2
         icon_y = 4
-        
+
         if self._pixmap and not self._pixmap.isNull():
-            painter.drawPixmap(icon_x, icon_y, self.icon_size, self.icon_size, self._pixmap)
-        
+            painter.drawPixmap(icon_x, icon_y, self.icon_w, self.icon_h, self._pixmap)
+
         # Name
         name = self.shortcut.get("name", "")
         if len(name) > 10:
             name = name[:9] + "…"
-        
+
         painter.setPen(QColor(224, 224, 224))
         painter.setFont(QFont("Segoe UI", 8))
-        
-        text_rect = QRect(0, icon_y + self.icon_size + 2, self.width(), 20)
+
+        text_rect = QRect(0, icon_y + self.icon_h + 2, self.width(), 20)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, name)
     
     def enterEvent(self, event):
@@ -705,6 +706,218 @@ class IconWidget(QWidget):
 
 
 # ============================================================================
+# Settings Dialog
+# ============================================================================
+
+class TileSettingsDialog(QDialog):
+    """Einstellungs-Dialog für eine Kachel"""
+
+    STYLE = """
+        QDialog {
+            background-color: #2d2d3d;
+            color: #e0e0e0;
+        }
+        QGroupBox {
+            font-family: 'Segoe UI';
+            font-weight: bold;
+            border: 1px solid rgba(255, 255, 255, 30);
+            border-radius: 8px;
+            margin-top: 12px;
+            padding-top: 16px;
+            color: #ffffff;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px;
+        }
+        QSpinBox {
+            background: rgba(255, 255, 255, 15);
+            border: 1px solid rgba(255, 255, 255, 30);
+            border-radius: 4px;
+            padding: 4px;
+            color: #e0e0e0;
+            min-width: 70px;
+        }
+        QLabel {
+            color: #c0c0c0;
+        }
+        QPushButton {
+            background: rgba(255, 255, 255, 15);
+            border: 1px solid rgba(255, 255, 255, 30);
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 4px 12px;
+        }
+        QPushButton:checked {
+            background: rgba(0, 120, 212, 80);
+            border-color: rgba(0, 120, 212, 150);
+        }
+        QPushButton:hover {
+            background: rgba(255, 255, 255, 25);
+        }
+    """
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kachel-Einstellungen")
+        self.setMinimumWidth(400)
+        self.setStyleSheet(self.STYLE)
+        self._config = config
+        self._setup_ui()
+
+    def _create_size_row(self, label_w, val_w, label_h, val_h, min_v, max_v):
+        """Erstellt eine Zeile mit zwei Spinboxen und Link-Toggle"""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        spin_w = QSpinBox()
+        spin_w.setRange(min_v, max_v)
+        spin_w.setValue(val_w)
+        spin_w.setSuffix(" px")
+
+        link_btn = QPushButton("🔗")
+        link_btn.setCheckable(True)
+        link_btn.setChecked(val_w == val_h)
+        link_btn.setFixedSize(28, 28)
+        link_btn.setToolTip("Breite und Höhe verknüpfen")
+
+        spin_h = QSpinBox()
+        spin_h.setRange(min_v, max_v)
+        spin_h.setValue(val_h)
+        spin_h.setSuffix(" px")
+
+        def on_w_changed(v):
+            if link_btn.isChecked():
+                spin_h.blockSignals(True)
+                spin_h.setValue(v)
+                spin_h.blockSignals(False)
+
+        def on_h_changed(v):
+            if link_btn.isChecked():
+                spin_w.blockSignals(True)
+                spin_w.setValue(v)
+                spin_w.blockSignals(False)
+
+        spin_w.valueChanged.connect(on_w_changed)
+        spin_h.valueChanged.connect(on_h_changed)
+
+        layout.addWidget(QLabel(label_w))
+        layout.addWidget(spin_w)
+        layout.addWidget(link_btn)
+        layout.addWidget(QLabel(label_h))
+        layout.addWidget(spin_h)
+
+        return row, spin_w, spin_h
+
+    def _create_spacing_row(self, val_h, val_v, min_v, max_v):
+        """Erstellt eine Zeile für Abstände"""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        spin_h = QSpinBox()
+        spin_h.setRange(min_v, max_v)
+        spin_h.setValue(val_h)
+        spin_h.setSuffix(" px")
+
+        spin_v = QSpinBox()
+        spin_v.setRange(min_v, max_v)
+        spin_v.setValue(val_v)
+        spin_v.setSuffix(" px")
+
+        layout.addWidget(QLabel("Horizontal:"))
+        layout.addWidget(spin_h)
+        layout.addWidget(QLabel("Vertikal:"))
+        layout.addWidget(spin_v)
+
+        return row, spin_h, spin_v
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        c = self._config
+
+        # Kleine Kachel
+        g1 = QGroupBox("Kleine Kachel (eingeklappt)")
+        g1l = QVBoxLayout(g1)
+        r1, self.coll_tile_w, self.coll_tile_h = self._create_size_row(
+            "Breite:", c.get("collapsed_tile_w", 120),
+            "Höhe:", c.get("collapsed_tile_h", 120), 60, 400)
+        g1l.addWidget(r1)
+        layout.addWidget(g1)
+
+        # Große Kachel
+        g2 = QGroupBox("Große Kachel (ausgeklappt)")
+        g2l = QVBoxLayout(g2)
+        r2, self.exp_tile_w, self.exp_tile_h = self._create_size_row(
+            "Breite:", c.get("expanded_tile_w", 260),
+            "Höhe:", c.get("expanded_tile_h", 320), 120, 800)
+        g2l.addWidget(r2)
+        layout.addWidget(g2)
+
+        # Icon-Größe (eingeklappt)
+        g3 = QGroupBox("Icon-Größe (eingeklappt)")
+        g3l = QVBoxLayout(g3)
+        r3, self.coll_icon_w, self.coll_icon_h = self._create_size_row(
+            "Breite:", c.get("collapsed_icon_w", 40),
+            "Höhe:", c.get("collapsed_icon_h", 40), 16, 128)
+        g3l.addWidget(r3)
+        layout.addWidget(g3)
+
+        # Icon-Größe (ausgeklappt)
+        g4 = QGroupBox("Icon-Größe (ausgeklappt)")
+        g4l = QVBoxLayout(g4)
+        r4, self.exp_icon_w, self.exp_icon_h = self._create_size_row(
+            "Breite:", c.get("expanded_icon_w", 36),
+            "Höhe:", c.get("expanded_icon_h", 36), 16, 128)
+        g4l.addWidget(r4)
+        layout.addWidget(g4)
+
+        # Abstände (eingeklappt)
+        g5 = QGroupBox("Abstände (eingeklappt)")
+        g5l = QVBoxLayout(g5)
+        r5, self.coll_spacing_h, self.coll_spacing_v = self._create_spacing_row(
+            c.get("collapsed_spacing_h", 4),
+            c.get("collapsed_spacing_v", 4), 0, 40)
+        g5l.addWidget(r5)
+        layout.addWidget(g5)
+
+        # Abstände (ausgeklappt)
+        g6 = QGroupBox("Abstände (ausgeklappt)")
+        g6l = QVBoxLayout(g6)
+        r6, self.exp_spacing_h, self.exp_spacing_v = self._create_spacing_row(
+            c.get("expanded_spacing_h", 8),
+            c.get("expanded_spacing_v", 8), 0, 40)
+        g6l.addWidget(r6)
+        layout.addWidget(g6)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_values(self):
+        """Gibt alle Einstellungen als Dict zurück"""
+        return {
+            "collapsed_tile_w": self.coll_tile_w.value(),
+            "collapsed_tile_h": self.coll_tile_h.value(),
+            "expanded_tile_w": self.exp_tile_w.value(),
+            "expanded_tile_h": self.exp_tile_h.value(),
+            "collapsed_icon_w": self.coll_icon_w.value(),
+            "collapsed_icon_h": self.coll_icon_h.value(),
+            "expanded_icon_w": self.exp_icon_w.value(),
+            "expanded_icon_h": self.exp_icon_h.value(),
+            "collapsed_spacing_h": self.coll_spacing_h.value(),
+            "collapsed_spacing_v": self.coll_spacing_v.value(),
+            "expanded_spacing_h": self.exp_spacing_h.value(),
+            "expanded_spacing_v": self.exp_spacing_v.value(),
+        }
+
+
+# ============================================================================
 # Folder Tile (Kachel)
 # ============================================================================
 
@@ -729,8 +942,14 @@ class FolderTile(FrostedGlassWidget):
         self.collapsed_height = config.get("collapsed_tile_h", 120)
         self.expanded_width = config.get("expanded_tile_w", 260)
         self.expanded_height = config.get("expanded_tile_h", 320)
-        self.icon_size_collapsed = config.get("collapsed_icon_w", 40)
-        self.icon_size_expanded = config.get("expanded_icon_w", 36)
+        self.icon_w_collapsed = config.get("collapsed_icon_w", 40)
+        self.icon_h_collapsed = config.get("collapsed_icon_h", 40)
+        self.icon_w_expanded = config.get("expanded_icon_w", 36)
+        self.icon_h_expanded = config.get("expanded_icon_h", 36)
+        self.spacing_h_collapsed = config.get("collapsed_spacing_h", 4)
+        self.spacing_v_collapsed = config.get("collapsed_spacing_v", 4)
+        self.spacing_h_expanded = config.get("expanded_spacing_h", 8)
+        self.spacing_v_expanded = config.get("expanded_spacing_v", 8)
         
         # Position
         x = config.get("pos_x", DESKTOP_MARGIN_X)
@@ -768,7 +987,8 @@ class FolderTile(FrostedGlassWidget):
         self.collapsed_grid = QWidget()
         self.collapsed_grid_layout = QGridLayout(self.collapsed_grid)
         self.collapsed_grid_layout.setContentsMargins(0, 0, 0, 0)
-        self.collapsed_grid_layout.setSpacing(4)
+        self.collapsed_grid_layout.setHorizontalSpacing(self.spacing_h_collapsed)
+        self.collapsed_grid_layout.setVerticalSpacing(self.spacing_v_collapsed)
         self.collapsed_layout.addWidget(self.collapsed_grid, stretch=1)
         
         # Name Label
@@ -802,7 +1022,8 @@ class FolderTile(FrostedGlassWidget):
         self.icons_container.setStyleSheet("background: transparent;")
         self.icons_layout = QGridLayout(self.icons_container)
         self.icons_layout.setContentsMargins(4, 4, 4, 4)
-        self.icons_layout.setSpacing(8)
+        self.icons_layout.setHorizontalSpacing(self.spacing_h_expanded)
+        self.icons_layout.setVerticalSpacing(self.spacing_v_expanded)
         
         self.scroll_area.setWidget(self.icons_container)
         self.expanded_layout.addWidget(self.scroll_area, stretch=1)
@@ -850,12 +1071,12 @@ class FolderTile(FrostedGlassWidget):
                 
                 icon_label = QLabel()
                 icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                icon_label.setFixedSize(self.icon_size_collapsed, self.icon_size_collapsed)
-                
-                pixmap = IconExtractor.get_icon(shortcut["path"], self.icon_size_collapsed)
+                icon_label.setFixedSize(self.icon_w_collapsed, self.icon_h_collapsed)
+
+                pixmap = IconExtractor.get_icon(shortcut["path"], max(self.icon_w_collapsed, self.icon_h_collapsed))
                 if pixmap and not pixmap.isNull():
                     icon_label.setPixmap(pixmap.scaled(
-                        self.icon_size_collapsed, self.icon_size_collapsed,
+                        self.icon_w_collapsed, self.icon_h_collapsed,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation
                     ))
@@ -884,7 +1105,7 @@ class FolderTile(FrostedGlassWidget):
                 row = i // cols
                 col = i % cols
                 
-                icon_widget = IconWidget(shortcut, i, self.icon_size_expanded)
+                icon_widget = IconWidget(shortcut, i, self.icon_w_expanded, self.icon_h_expanded)
                 icon_widget.doubleClicked.connect(lambda s=shortcut: self._launch_shortcut(s["path"]))
                 icon_widget.rightClicked.connect(lambda pos, idx=i: self._show_item_menu(pos, idx))
                 icon_widget.dragStarted.connect(self._start_icon_drag)
@@ -1103,16 +1324,19 @@ class FolderTile(FrostedGlassWidget):
         """)
         
         rename_action = menu.addAction("✏️ Umbenennen")
+        settings_action = menu.addAction("⚙️ Einstellungen")
         menu.addSeparator()
         new_tile_action = menu.addAction("➕ Neue Kachel")
         delete_action = menu.addAction("🗑️ Kachel löschen")
         menu.addSeparator()
         quit_action = menu.addAction("❌ Beenden")
-        
+
         action = menu.exec(pos)
-        
+
         if action == rename_action:
             self._start_rename(None)
+        elif action == settings_action:
+            self._show_settings()
         elif action == new_tile_action:
             self.manager.create_new_tile()
         elif action == delete_action:
@@ -1120,6 +1344,40 @@ class FolderTile(FrostedGlassWidget):
         elif action == quit_action:
             self.manager.quit()
     
+    def _show_settings(self):
+        """Öffnet den Einstellungs-Dialog für diese Kachel"""
+        dlg = TileSettingsDialog(self.config, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            values = dlg.get_values()
+            # Config aktualisieren
+            self.config.update(values)
+            # Interne Werte aktualisieren
+            self.collapsed_width = values["collapsed_tile_w"]
+            self.collapsed_height = values["collapsed_tile_h"]
+            self.expanded_width = values["expanded_tile_w"]
+            self.expanded_height = values["expanded_tile_h"]
+            self.icon_w_collapsed = values["collapsed_icon_w"]
+            self.icon_h_collapsed = values["collapsed_icon_h"]
+            self.icon_w_expanded = values["expanded_icon_w"]
+            self.icon_h_expanded = values["expanded_icon_h"]
+            self.spacing_h_collapsed = values["collapsed_spacing_h"]
+            self.spacing_v_collapsed = values["collapsed_spacing_v"]
+            self.spacing_h_expanded = values["expanded_spacing_h"]
+            self.spacing_v_expanded = values["expanded_spacing_v"]
+            # Spacings anwenden
+            self.collapsed_grid_layout.setHorizontalSpacing(self.spacing_h_collapsed)
+            self.collapsed_grid_layout.setVerticalSpacing(self.spacing_v_collapsed)
+            self.icons_layout.setHorizontalSpacing(self.spacing_h_expanded)
+            self.icons_layout.setVerticalSpacing(self.spacing_v_expanded)
+            # Ansicht aktualisieren
+            if self.is_expanded:
+                self.resize(self.expanded_width, self.expanded_height)
+                self._update_expanded_icons()
+            else:
+                self.resize(self.collapsed_width, self.collapsed_height)
+                self._update_collapsed_icons()
+            self.manager.save_config()
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
