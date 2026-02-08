@@ -57,6 +57,14 @@ try:
 except ImportError:
     HAS_SHELL = False
 
+# Für Blur-Effekt
+try:
+    from BlurWindow.blurWindow import GlobalBlur
+    HAS_BLURWINDOW = True
+except ImportError:
+    HAS_BLURWINDOW = False
+    print("⚠️ BlurWindow nicht installiert. pip install BlurWindow")
+
 # Windows DPI Awareness
 try:
     from ctypes import windll
@@ -566,36 +574,46 @@ class FrostedGlassWidget(QWidget):
         self._enable_blur()
     
     def _enable_blur(self):
-        """Aktiviert den Windows Blur-Effekt"""
+        """Aktiviert den Windows Blur-Effekt (BlurWindow → DWM Fallback)"""
         if self._blur_enabled:
             return
-        
+
         hwnd = int(self.winId())
-        
-        # Versuche Windows 11 Mica
+
+        # 1) BlurWindow-Bibliothek (bevorzugt)
+        if HAS_BLURWINDOW:
+            try:
+                GlobalBlur(hwnd, hexColor='#19191a40', Acrylic=True, Dark=True, QWidget=self)
+                print("✓ BlurWindow Acrylic aktiviert")
+                self._blur_enabled = True
+                return
+            except Exception as e:
+                print(f"BlurWindow fehlgeschlagen: {e}")
+
+        # 2) Fallback: Windows 11 Mica
         if enable_mica_effect(hwnd):
             print("✓ Mica Effekt aktiviert")
             self._blur_enabled = True
             return
-        
-        # Fallback: Acrylic Blur
-        # AABBGGRR - helles Frosted Glass mit hoher Transparenz
-        gradient_color = 0x44FFFFFF
+
+        # 3) Fallback: Acrylic Blur (manuelle DWM API)
+        gradient_color = 0x40FFFFFF
         if enable_acrylic_blur(hwnd, gradient_color):
             print("✓ Acrylic Blur aktiviert")
             self._blur_enabled = True
             return
-        
-        # Fallback: Standard Blur Behind
+
+        # 4) Fallback: Standard Blur Behind
         if enable_blur_behind(hwnd):
             print("✓ Blur Behind aktiviert")
             self._blur_enabled = True
             return
-        
+
         print("⚠ Kein Blur-Effekt verfügbar")
     
     def paintEvent(self, event):
-        """Zeichnet den Frosted Glass Hintergrund"""
+        """Zeichnet nur die Glas-Overlays -- der Hintergrund bleibt transparent
+        damit der Blur-Effekt (BlurWindow / Acrylic) durchscheint."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
@@ -606,31 +624,20 @@ class FrostedGlassWidget(QWidget):
         path.addRoundedRect(0, 0, w, h, r, r)
         painter.setClipPath(path)
 
-        # 1) Halbtransparenter Hintergrund (leichter Tint über dem Blur)
+        # 1) Sehr leichter Tint, damit die Kachel sich vom Blur abhebt
         painter.fillPath(path, QBrush(self._background_color))
 
-        # 2) Glaseffekt-Gradient: starker Highlight oben, Schatten unten
+        # 2) Subtiler Glas-Gradient (Highlight oben)
         glass_grad = QLinearGradient(0, 0, 0, h)
-        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 50))
-        glass_grad.setColorAt(0.15, QColor(255, 255, 255, 22))
-        glass_grad.setColorAt(0.5, QColor(255, 255, 255, 6))
-        glass_grad.setColorAt(0.85, QColor(0, 0, 0, 8))
-        glass_grad.setColorAt(1.0, QColor(0, 0, 0, 20))
+        glass_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
+        glass_grad.setColorAt(0.25, QColor(255, 255, 255, 10))
+        glass_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.fillPath(path, QBrush(glass_grad))
 
-        # 3) Diagonaler Lichtreflex (Glanzeffekt)
-        reflex_grad = QLinearGradient(0, 0, w, h * 0.6)
-        reflex_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
-        reflex_grad.setColorAt(0.3, QColor(255, 255, 255, 8))
-        reflex_grad.setColorAt(0.5, QColor(255, 255, 255, 0))
-        reflex_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        painter.fillPath(path, QBrush(reflex_grad))
-
-        # 4) Noise-Textur für Frosted-Effekt
+        # 3) Noise-Textur für Frosted-Effekt
         if FrostedGlassWidget._shared_noise is not None:
-            painter.setOpacity(0.5)
+            painter.setOpacity(0.35)
             noise = FrostedGlassWidget._shared_noise
-            # Noise kacheln über die gesamte Fläche
             for ny in range(0, h, noise.height()):
                 for nx in range(0, w, noise.width()):
                     painter.drawPixmap(nx, ny, noise)
@@ -639,25 +646,17 @@ class FrostedGlassWidget(QWidget):
         # Clipping aufheben für Ränder
         painter.setClipPath(path, Qt.ClipOperation.NoClip)
 
-        # 5) Innerer Highlight-Rand (oberer Bereich)
-        inner_path = QPainterPath()
-        inner_path.addRoundedRect(1, 1, w - 2, h * 0.35, r - 1, r - 1)
-        # Nur den Bereich innerhalb des Hauptpfads füllen
-        combined = path & inner_path
-        painter.fillPath(combined, QBrush(QColor(255, 255, 255, 14)))
-
-        # 6) Innerer Leuchtrand (1px innen, heller oben)
+        # 4) Innerer Leuchtrand (heller oben, dunkler unten)
         inner_border_grad = QLinearGradient(0, 0, 0, h)
-        inner_border_grad.setColorAt(0.0, QColor(255, 255, 255, 70))
-        inner_border_grad.setColorAt(0.5, QColor(255, 255, 255, 20))
-        inner_border_grad.setColorAt(1.0, QColor(255, 255, 255, 10))
-        inner_pen = QPen(QBrush(inner_border_grad), 1.0)
-        painter.setPen(inner_pen)
+        inner_border_grad.setColorAt(0.0, QColor(255, 255, 255, 60))
+        inner_border_grad.setColorAt(0.5, QColor(255, 255, 255, 15))
+        inner_border_grad.setColorAt(1.0, QColor(255, 255, 255, 8))
+        painter.setPen(QPen(QBrush(inner_border_grad), 1.0))
         inner_rect = QPainterPath()
         inner_rect.addRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
         painter.drawPath(inner_rect)
 
-        # 7) Äußerer Rand
+        # 5) Äußerer Rand
         painter.setPen(QPen(self._border_color, 1.0))
         painter.drawPath(path)
 
