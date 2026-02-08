@@ -542,42 +542,29 @@ class FrostedGlassWidget(QWidget):
         self._enable_blur()
 
     def _enable_blur(self):
-        """Aktiviert den Windows Blur-Effekt (BlurWindow → DWM Fallback)"""
+        """Aktiviert den Windows Blur-Effekt hinter dem Fenster"""
         if self._blur_enabled:
             return
 
         hwnd = int(self.winId())
 
-        # 1) BlurWindow-Bibliothek (bevorzugt)
+        # BlurWindow mit Standard-Blur (nicht Acrylic - das erzeugt opakes Grau)
         if HAS_BLURWINDOW:
             try:
-                GlobalBlur(hwnd, Acrylic=True, Dark=True, QWidget=self)
-                print("✓ BlurWindow Acrylic aktiviert")
+                GlobalBlur(hwnd, Dark=False, Acrylic=False, QWidget=self)
+                print("✓ BlurWindow Blur aktiviert")
                 self._blur_enabled = True
                 return
             except Exception as e:
                 print(f"BlurWindow fehlgeschlagen: {e}")
 
-        # 2) Fallback: Windows 11 Mica
-        if enable_mica_effect(hwnd):
-            print("✓ Mica Effekt aktiviert")
-            self._blur_enabled = True
-            return
-
-        # 3) Fallback: Acrylic Blur (manuelle DWM API)
-        gradient_color = 0x01000000
-        if enable_acrylic_blur(hwnd, gradient_color):
-            print("✓ Acrylic Blur aktiviert")
-            self._blur_enabled = True
-            return
-
-        # 4) Fallback: Standard Blur Behind
+        # Fallback: DWM Blur Behind (kein Acrylic, kein Mica)
         if enable_blur_behind(hwnd):
             print("✓ Blur Behind aktiviert")
             self._blur_enabled = True
             return
 
-        print("⚠ Kein Blur-Effekt verfügbar")
+        print("⚠ Kein Blur-Effekt verfügbar - reine Transparenz aktiv")
 
     def paintEvent(self, event):
         """Zeichnet die halbtransparente Glaskachel"""
@@ -919,10 +906,6 @@ class FolderTile(FrostedGlassWidget):
         self._update_expanded_icons()
         self.expanded_widget.show()
         self.animation_running = False
-        
-        # Blur neu aktivieren
-        self._blur_enabled = False
-        self._enable_blur()
     
     def _show_collapsed(self):
         """Zeigt die eingeklappte Ansicht"""
