@@ -24,11 +24,12 @@ import atexit
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QFrame, QVBoxLayout, QHBoxLayout,
     QGridLayout, QScrollArea, QMenu, QInputDialog, QMessageBox,
-    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QPushButton
+    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QPushButton,
+    QFileIconProvider
 )
 from PyQt6.QtCore import (
     Qt, QPoint, QSize, QPropertyAnimation, QEasingCurve, QTimer,
-    QRect, pyqtSignal, QMimeData, QUrl, QEvent
+    QRect, pyqtSignal, QMimeData, QUrl, QEvent, QFileInfo
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QFont, QIcon, QCursor,
@@ -349,20 +350,50 @@ class WindowsDesktopAPI:
 
 class IconExtractor:
     """Extrahiert Datei-Icons mit Transparenz"""
-    
+
     _cache = {}
-    
+    _provider = None
+
+    @classmethod
+    def _get_provider(cls):
+        if cls._provider is None:
+            cls._provider = QFileIconProvider()
+        return cls._provider
+
     @classmethod
     def get_icon(cls, filepath, size=48):
-        """Holt Icon für eine Datei"""
+        """Holt Icon für eine Datei als QPixmap"""
         cache_key = (filepath, size)
         if cache_key in cls._cache:
             return cls._cache[cache_key]
-        
-        icon = cls._extract_icon(filepath, size)
-        if icon:
-            cls._cache[cache_key] = icon
-        return icon
+
+        # Primär: Qt QFileIconProvider (nutzt dieselbe Windows Shell API wie der Desktop)
+        pixmap = cls._extract_icon_qt(filepath, size)
+
+        # Fallback: Win32 API Extraktion
+        if pixmap is None or pixmap.isNull():
+            pil_img = cls._extract_icon(filepath, size)
+            pixmap = pil_to_qpixmap(pil_img)
+
+        if pixmap and not pixmap.isNull():
+            cls._cache[cache_key] = pixmap
+        return pixmap
+
+    @classmethod
+    def _extract_icon_qt(cls, filepath, size):
+        """Extrahiert Icon über Qt's QFileIconProvider (gleiche Icons wie Desktop)"""
+        try:
+            if not filepath or not os.path.exists(filepath):
+                return None
+            provider = cls._get_provider()
+            file_info = QFileInfo(filepath)
+            icon = provider.icon(file_info)
+            if icon.isNull():
+                return None
+            pixmap = icon.pixmap(QSize(size, size))
+            return pixmap if not pixmap.isNull() else None
+        except Exception:
+            return None
     
     @classmethod
     def _extract_icon(cls, filepath, size):
@@ -609,8 +640,7 @@ class IconWidget(QWidget):
     
     def _load_icon(self):
         """Lädt das Icon für den Shortcut"""
-        pil_img = IconExtractor.get_icon(self.shortcut["path"], self.icon_size)
-        return pil_to_qpixmap(pil_img)
+        return IconExtractor.get_icon(self.shortcut["path"], self.icon_size)
     
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -626,7 +656,7 @@ class IconWidget(QWidget):
         icon_x = (self.width() - self.icon_size) // 2
         icon_y = 4
         
-        if not self._pixmap.isNull():
+        if self._pixmap and not self._pixmap.isNull():
             painter.drawPixmap(icon_x, icon_y, self.icon_size, self.icon_size, self._pixmap)
         
         # Name
@@ -822,9 +852,8 @@ class FolderTile(FrostedGlassWidget):
                 icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 icon_label.setFixedSize(self.icon_size_collapsed, self.icon_size_collapsed)
                 
-                pil_img = IconExtractor.get_icon(shortcut["path"], self.icon_size_collapsed)
-                pixmap = pil_to_qpixmap(pil_img)
-                if not pixmap.isNull():
+                pixmap = IconExtractor.get_icon(shortcut["path"], self.icon_size_collapsed)
+                if pixmap and not pixmap.isNull():
                     icon_label.setPixmap(pixmap.scaled(
                         self.icon_size_collapsed, self.icon_size_collapsed,
                         Qt.AspectRatioMode.KeepAspectRatio,
