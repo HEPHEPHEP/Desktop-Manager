@@ -65,12 +65,8 @@ except ImportError:
     HAS_BLURWINDOW = False
     print("⚠️ BlurWindow nicht installiert. pip install BlurWindow")
 
-# Windows DPI Awareness
-try:
-    from ctypes import windll
-    windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except:
-    pass
+# DPI Awareness wird von Qt6 automatisch gesetzt
+# (DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
 
 # ============================================================================
 # Windows API Definitionen
@@ -823,7 +819,7 @@ class FolderTile(FrostedGlassWidget):
         # Name Label
         self.name_label = QLabel(self.config.get("name", "Ordner"))
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.name_label.setStyleSheet("color: #ffffff; font-family: 'Segoe UI'; font-size: 9pt; text-shadow: 0 1px 2px rgba(0,0,0,0.5);")
+        self.name_label.setStyleSheet("color: #ffffff; font-family: 'Segoe UI'; font-size: 9pt;")
         self.collapsed_layout.addWidget(self.name_label)
         
         self.main_layout.addWidget(self.collapsed_widget)
