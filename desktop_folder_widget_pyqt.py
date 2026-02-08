@@ -735,15 +735,18 @@ class FolderTile(FrostedGlassWidget):
     
     def _setup_ui(self):
         """Erstellt die UI-Komponenten"""
+        # Alle Kind-Widgets transparent machen
+        self.setStyleSheet("QWidget { background: transparent; }")
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(8, 8, 8, 8)
         self.main_layout.setSpacing(4)
-        
+
         # Collapsed View
         self.collapsed_widget = QWidget()
         self.collapsed_layout = QVBoxLayout(self.collapsed_widget)
         self.collapsed_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         # Icon Grid für Collapsed
         self.collapsed_grid = QWidget()
         self.collapsed_grid_layout = QGridLayout(self.collapsed_grid)
